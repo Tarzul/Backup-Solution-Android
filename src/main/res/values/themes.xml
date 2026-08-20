@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.BackupApp" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <!-- Основные цвета бренда -->
+        <item name="colorPrimary">@color/primary_blue</item>
+        <item name="colorPrimaryVariant">@color/primary_blue_dark</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+        
+        <!-- Акцентный цвет (для чекбоксов, переключателей, прогресс-баров) -->
+        <item name="colorAccent">@color/primary_blue</item>
+        <item name="colorSecondary">@color/primary_blue</item>
+        <item name="colorOnSecondary">@color/on_primary</item>
+        
+        <!-- Поверхности -->
+        <item name="colorSurface">@color/surface_dark</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="android:colorBackground">@color/background_dark</item>
+        <item name="colorOnBackground">@color/text_primary</item>
+        
+        <!-- Системные бары -->
+        <item name="android:windowBackground">@color/background_dark</item>
+        <item name="android:statusBarColor">@color/background_darker</item>
+        <item name="android:navigationBarColor">@color/background_darker</item>
+        
+        <!-- ВАЖНО: Глобальный цвет для чекбоксов и контролов -->
+        <!-- Это избавит вас от необходимости вручную добавлять buttonTint в каждый CheckBox -->
+        <item name="colorControlActivated">@color/primary_blue</item>
+        <item name="colorControlNormal">@color/hint_gray</item>
+        <item name="colorControlHighlight">@color/border_gray</item>
+        
+        <!-- Светлый текст на темном фоне для диалогов -->
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorHint">@color/hint_gray</item>
+        
+        <!-- Для Android 12+ (Material You) -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
+    </style>
+</resources>

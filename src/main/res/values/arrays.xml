@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="auth_types">
+        <item>Авто (Basic + Digest)</item>
+        <item>Только Basic</item>
+        <item>Только Digest</item>
+    </string-array>
+    
+    <!-- Можно добавить дополнительные массивы для будущего использования -->
+    <string-array name="schedule_modes">
+        <item>Минуты</item>
+        <item>Ежечасно</item>
+        <item>Ежедневно</item>
+        <item>Еженедельно</item>
+        <item>Ежемесячно</item>
+    </string-array>
+</resources>

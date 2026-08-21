@@ -61,9 +61,11 @@ object HistoryManager {
             synchronized(this) {
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 val records = getRecordsLocked(prefs).toMutableList()
-                // НОВОЕ: завершаем "висячие" live-записи от прерванных запусков
+                val now = System.currentTimeMillis()
+                val LIVE_TIMEOUT = 30 * 60 * 1000L  // 10 минут
                 for (i in records.indices) {
-                    if (records[i].status == "running") {
+                    if (records[i].status == "running" &&
+                        now - records[i].liveStartedAt > LIVE_TIMEOUT) {
                         records[i] = records[i].copy(status = "error")
                     }
                 }

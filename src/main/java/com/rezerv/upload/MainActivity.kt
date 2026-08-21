@@ -121,16 +121,14 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val am = getSystemService(AlarmManager::class.java)
             if (!am.canScheduleExactAlarms()) {
-                AlertDialog.Builder(this)
-                    .setTitle("Точные будильники")
-                    .setMessage("Для синхронизации по расписанию разрешите точные будильники в настройках системы.")
-                    .setPositiveButton("Открыть настройки") { _, _ ->
-                        try {
-                            startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                                Uri.parse("package:$packageName")))
-                        } catch (_: Exception) {}
-                    }
-                    .setNegativeButton("Позже", null).show()
+                try {
+                    startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                        Uri.parse("package:$packageName")))
+                } catch (_: Exception) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
+                    } catch (_: Exception) {}
+                }
             }
         }
     }

@@ -23,17 +23,40 @@
         <item name="android:navigationBarColor">@color/background_darker</item>
         
         <!-- ВАЖНО: Глобальный цвет для чекбоксов и контролов -->
-        <!-- Это избавит вас от необходимости вручную добавлять buttonTint в каждый CheckBox -->
         <item name="colorControlActivated">@color/primary_blue</item>
         <item name="colorControlNormal">@color/hint_gray</item>
         <item name="colorControlHighlight">@color/border_gray</item>
         
-        <!-- Светлый текст на темном фоне для диалогов -->
+        <!-- Светлый текст на темном фоне -->
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="android:textColorHint">@color/hint_gray</item>
         
+        <!-- ИСПРАВЛЕНО: все диалоги — тёмные, даже если системная тема светлая -->
+        <item name="alertDialogTheme">@style/DarkAlertDialog</item>
+        <item name="android:alertDialogTheme">@style/DarkAlertDialog</item>
+        
         <!-- Для Android 12+ (Material You) -->
         <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
+    </style>
+
+    <!-- ИСПРАВЛЕНО: единая тёмная тема для ВСЕХ диалогов приложения.
+         Исправляет белый текст на белом фоне на устройствах со светлой системной темой. -->
+    <style name="DarkAlertDialog" parent="ThemeOverlay.AppCompat.Dialog.Alert">
+        <item name="android:background">#FF202020</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:textColorPrimary">#FFFFFFFF</item>
+        <item name="android:textColor">#FFDDDDDD</item>
+        <item name="android:textColorSecondary">#FFBBBBBB</item>
+        <item name="textColorAlertDialogListItem">#FFFFFFFF</item>
+        <item name="colorAccent">@color/primary_blue</item>
+        <item name="buttonBarPositiveButtonStyle">@style/DarkDialogButton</item>
+        <item name="buttonBarNegativeButtonStyle">@style/DarkDialogButton</item>
+        <item name="buttonBarNeutralButtonStyle">@style/DarkDialogButton</item>
+    </style>
+
+    <!-- ИСПРАВЛЕНО: кнопки в диалогах — читаемые на тёмном фоне -->
+    <style name="DarkDialogButton" parent="Widget.AppCompat.Button.ButtonBar.AlertDialog">
+        <item name="android:textColor">@color/primary_blue</item>
     </style>
 </resources>

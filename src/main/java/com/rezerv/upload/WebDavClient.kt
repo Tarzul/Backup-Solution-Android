@@ -1,29 +1,40 @@
 package com.rezerv.upload
 
+import android.util.Base64
+import android.util.Log
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 
 object WebDavClient {
-    private val clientRef = AtomicReference<OkHttpClient?>(null)
-    private val currentAuthRef = AtomicReference<String?>(null)
+    private const val TAG = "WebDavClient"
 
     /** 0 = авто, 1 = только Basic, 2 = только Digest. Устанавливается из SecurePrefs. */
     @Volatile var defaultAuthType: Int = 0
 
-    @Synchronized
-    private fun getClient(user: String, pass: String, authType: Int): OkHttpClient {
-        val authKey = "$user:$pass:$authType"
-        clientRef.get()?.let { if (currentAuthRef.get() == authKey) return it }
+    // ИСПРАВЛЕНО: кэш клиентов по ключу. Клиенты БОЛЬШЕ не выключают друг друга —
+    // Coil-клиент остаётся живым после создания клиента с кредами.
+    private val clients = ConcurrentHashMap<String, OkHttpClient>()
+
+    /** Клиент для Coil: без превентивной авторизации, но с Digest-аутентификатором,
+     *  который берёт креды из Basic-заголовка запроса (его ставит адаптер). */
+    val httpClient: OkHttpClient
+        get() = getClient("", "", defaultAuthType, forCoil = true)
+
+    private fun getClient(user: String, pass: String, authType: Int, forCoil: Boolean = false): OkHttpClient {
+        val key = "$user|$pass|$authType|${if (forCoil) "coil" else "api"}"
+        clients[key]?.let { return it }
+
         val builder = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
             .writeTimeout(300, TimeUnit.SECONDS)
-            .followRedirects(true)          // ИСПРАВЛЕНО: редиректы включены
+            .followRedirects(true)
             .followSslRedirects(true)
+
         if (user.isNotEmpty()) {
             // Превентивный Basic — только в режимах «авто» и «только Basic»
             if (authType != 2) {
@@ -45,15 +56,25 @@ object WebDavClient {
                         .header("Authorization", Credentials.basic(user, pass)).build()
                 }
             }
+        } else if (forCoil) {
+            // НОВОЕ: Coil-клиент умеет Digest, декодируя креды из Basic-заголовка
+            builder.authenticator(BasicHeaderDigestAuthenticator())
         }
-        val newClient = builder.build()
-        clientRef.get()?.dispatcher?.executorService?.shutdown()   // ИСПРАВЛЕНО: не копим клиенты
-        clientRef.set(newClient)
-        currentAuthRef.set(authKey)
-        return newClient
+
+        val client = builder.build()
+        clients[key] = client
+
+        // Не копим бесконечно: >4 — выключаем самый старый, кроме текущего
+        if (clients.size > 4) {
+            val oldest = clients.keys.firstOrNull { it != key }
+            if (oldest != null) clients.remove(oldest)?.dispatcher?.executorService?.shutdown()
+        }
+        return client
     }
 
     private fun client(user: String, pass: String) = getClient(user, pass, defaultAuthType)
+
+    // ==================== HTTP-методы WebDAV ====================
 
     fun options(url: String, user: String, pass: String): Pair<Int, String> {
         client(user, pass).newCall(Request.Builder().url(url).method("OPTIONS", null).build())
@@ -61,7 +82,6 @@ object WebDavClient {
     }
 
     fun propfind(url: String, user: String, pass: String): String {
-        // ИСПРАВЛЕНО: валидный XML
         val body = """<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:">
   <D:prop>
@@ -84,30 +104,26 @@ object WebDavClient {
         client(user, pass).newCall(Request.Builder().url(url).get().build()).execute()
 
     fun put(url: String, user: String, pass: String, inputStream: java.io.InputStream, length: Long): Int {
-        val requestBody = object : RequestBody() {
-            override fun contentType(): MediaType = "application/octet-stream".toMediaType()
-            override fun contentLength(): Long = length
-            override fun writeTo(sink: okio.BufferedSink) {
-                val buffer = ByteArray(64 * 1024)
-                inputStream.use { input ->
-                    var n: Int
-                    while (input.read(buffer).also { n = it } != -1) { sink.write(buffer, 0, n); sink.flush() }
-                }
-            }
+
+        val bytes = inputStream.use { it.readBytes() }
+        val body = bytes.toRequestBody("application/octet-stream".toMediaType())
+        client(user, pass).newCall(Request.Builder().url(url).put(body).build()).execute().use { r ->
+            Log.d(TAG, "PUT -> HTTP ${r.code}: $url")
+            return r.code
         }
-        client(user, pass).newCall(Request.Builder().url(url).put(requestBody).build()).execute().use { return it.code }
     }
 
     fun delete(url: String, user: String, pass: String): Int =
-        client(user, pass).newCall(Request.Builder().url(url).delete().build()).execute().use { it.code }
+        client(user, pass).newCall(Request.Builder().url(url).delete().build()).execute().use { return it.code }
 
     fun mkcol(url: String, user: String, pass: String): Int =
-        client(user, pass).newCall(Request.Builder().url(url).method("MKCOL", null).build()).execute().use { it.code }
+        client(user, pass).newCall(Request.Builder().url(url).method("MKCOL", null).build()).execute().use { return it.code }
 
     fun head(url: String, user: String, pass: String): Int =
-        client(user, pass).newCall(Request.Builder().url(url).head().build()).execute().use { it.code }
+        client(user, pass).newCall(Request.Builder().url(url).head().build()).execute().use { return it.code }
 
     // ==================== Digest (RFC 2617, MD5, qop=auth) ====================
+
     private class DigestAuthenticator(private val user: String, private val pass: String) : Authenticator {
         override fun authenticate(route: Route?, response: Response): Request? {
             val challenge = response.header("WWW-Authenticate") ?: return null
@@ -135,6 +151,7 @@ object WebDavClient {
             }
             return req.newBuilder().header("Authorization", header).build()
         }
+
         private fun parse(s: String): Map<String, String> {
             val map = mutableMapOf<String, String>()
             for (m in Regex("(\\w+)=(\"[^\"]*\"|[^,]*)").findAll(s)) {
@@ -144,7 +161,26 @@ object WebDavClient {
             }
             return map
         }
+
         private fun md5(s: String) = java.security.MessageDigest.getInstance("MD5")
             .digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    // НОВОЕ: аутентификатор для Coil-клиента — берёт креды из Basic-заголовка запроса
+    private class BasicHeaderDigestAuthenticator : Authenticator {
+        override fun authenticate(route: Route?, response: Response): Request? {
+            val basic = response.request.header("Authorization") ?: return null
+            if (!basic.startsWith("Basic ", true)) return null
+            val decoded = try {
+                String(android.util.Base64.decode(basic.substring(6).trim(), android.util.Base64.DEFAULT))
+            } catch (e: Exception) {
+                return null
+            }
+            val idx = decoded.indexOf(':')
+            if (idx <= 0) return null
+            val user = decoded.substring(0, idx)
+            val pass = decoded.substring(idx + 1)
+            return DigestAuthenticator(user, pass).authenticate(route, response)
+        }
     }
 }

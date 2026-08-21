@@ -113,7 +113,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         
             appendLog("✓ Элементов: ${sorted.size}")
-            RemoteImageLoader.prefetch(server, user, pass, sorted, limit = 20)
+            CoilPrefetch.prefetch(getApplication(), server, user, pass, sorted)
         }
     }
 
@@ -241,19 +241,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         failed++
                         return@forEachIndexed
                     }
-                    inputStream.use { input ->
-                        val uploaded = WebDavRepository.uploadFile(
-                            base, remotePath, input, meta.size, user, pass
-                        ) { bytes ->
-                            _uiState.value = _uiState.value?.copy(
-                                uploadProgress = _uiState.value?.uploadProgress?.copy(bytesUploaded = bytes)
+                  
+                    val code = inputStream.use { input ->
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            WebDavClient.put(
+                                base + WebDavRepository.encodePath(remotePath),
+                                user, pass, input, meta.size
                             )
                         }
-                        if (uploaded) { appendLog("✓ ${meta.name} загружен"); success++ }
-                        else { appendLog("✗ ${meta.name} не загружен (ошибка сервера)"); failed++ }
                     }
+                    _uiState.value = _uiState.value?.copy(
+                        uploadProgress = _uiState.value?.uploadProgress?.copy(bytesUploaded = meta.size)
+                    )
+                    if (code in 200..299) { appendLog("✓ ${meta.name} загружен (HTTP $code)"); success++ }
+                    else { appendLog("✗ ${meta.name}: HTTP $code"); failed++ }
                 } catch (e: Exception) {
-                    appendLog("✗ Исключение при загрузке ${meta.name}: ${e.message}")
+                    appendLog("✗ Исключение при загрузке ${meta.name}: ${e.javaClass.simpleName}: ${e.message}")
                     failed++
                 }
             }

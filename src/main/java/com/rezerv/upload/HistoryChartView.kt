@@ -36,10 +36,6 @@ class HistoryChartView @JvmOverloads constructor(
     private val sdf = SimpleDateFormat("dd.MM", Locale.getDefault())
     private val tempCalendar = Calendar.getInstance() // Переиспользуемый объект
 
-    init {
-        updateDates() // Генерируем подписи дат один раз
-    }
-
     private fun dpToPx(dp: Float): Float = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, dp, context.resources.displayMetrics
     )
@@ -57,12 +53,13 @@ class HistoryChartView @JvmOverloads constructor(
     private fun updateDates() {
         val days = 7
         val dayMillis = 86400000L
-        tempCalendar.apply {
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        val todayCal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
         }
-        val startToday = tempCalendar.timeInMillis
-        
+        val startToday = todayCal.timeInMillis
         dates = (0 until days).map { i ->
             val dayStart = startToday - (days - 1 - i) * dayMillis
             sdf.format(Date(dayStart))
@@ -73,29 +70,32 @@ class HistoryChartView @JvmOverloads constructor(
         val days = 7
         val dayMillis = 86400000L
         counts = IntArray(days)
-        
-        tempCalendar.apply {
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }
-        val startToday = tempCalendar.timeInMillis
 
+        val todayCal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startToday = todayCal.timeInMillis
+
+        val recordCal = Calendar.getInstance()
         for (r in records) {
-            // Находим начало дня для конкретной записи
-            tempCalendar.timeInMillis = r.time
-            tempCalendar.set(Calendar.HOUR_OF_DAY, 0)
-            tempCalendar.set(Calendar.MINUTE, 0)
-            tempCalendar.set(Calendar.SECOND, 0)
-            tempCalendar.set(Calendar.MILLISECOND, 0)
-            val recordDayStart = tempCalendar.timeInMillis
-            
-            // Теперь разница в днях считается корректно
+            recordCal.timeInMillis = r.time
+            recordCal.set(Calendar.HOUR_OF_DAY, 0)
+            recordCal.set(Calendar.MINUTE, 0)
+            recordCal.set(Calendar.SECOND, 0)
+            recordCal.set(Calendar.MILLISECOND, 0)
+            val recordDayStart = recordCal.timeInMillis
             val diffDays = ((startToday - recordDayStart) / dayMillis).toInt()
             if (diffDays in 0 until days) {
                 counts[days - 1 - diffDays]++
             }
         }
         maxCount = maxOf(1, counts.maxOrNull() ?: 1)
+
+        // Обновляем подписи дат каждый раз (дата может смениться)
+        updateDates()
     }
 
     override fun onDraw(canvas: Canvas) {

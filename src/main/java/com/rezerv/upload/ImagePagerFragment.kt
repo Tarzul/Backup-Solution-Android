@@ -11,11 +11,11 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
-import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
-import kotlinx.coroutines.launch
+import coil.load
+import coil.request.ImageRequest
 
 class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
 
@@ -232,16 +232,23 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val f = images[position]
             holder.pb.visibility = View.VISIBLE
-            holder.iv.setImageBitmap(null)
-            holder.iv.tag = f.path
-            holder.iv.setOnClickListener { toggleSelectionFor(f) }
-            lifecycleScope.launch {
-                val bmp = RemoteImageLoader.loadFull(server, user, pass, f.path)
-                if (holder.iv.tag == f.path && bmp != null) {
-                    holder.iv.setImageBitmap(bmp)
-                    holder.pb.visibility = View.GONE
-                }
+            holder.iv.load(WebDavImages.url(server, f.path)) {
+                addHeader("Authorization", WebDavImages.basicHeader(user, pass))
+                memoryCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
+                diskCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
+                placeholder(android.R.drawable.ic_menu_gallery)
+                error(android.R.drawable.ic_menu_report_image)
+                crossfade(true)
+                listener(object : coil.request.ImageRequest.Listener {
+                    override fun onSuccess(request: coil.request.ImageRequest, result: coil.request.SuccessResult) {
+                        holder.pb.visibility = View.GONE
+                    }
+                    override fun onError(request: coil.request.ImageRequest, result: coil.request.ErrorResult) {
+                        holder.pb.visibility = View.GONE
+                    }
+                })
             }
+            holder.iv.setOnClickListener { toggleSelectionFor(f) }
         }
 
         override fun getItemCount(): Int = images.size
@@ -271,11 +278,15 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
 
         override fun onBindViewHolder(holder: VH, position: Int) {
             val f = images[position]
-            holder.iv.tag = f.path
-            holder.iv.setImageBitmap(null)
-            lifecycleScope.launch {
-                val bmp = RemoteImageLoader.loadThumbnail(server, user, pass, f.path)
-                if (holder.iv.tag == f.path && bmp != null) holder.iv.setImageBitmap(bmp)
+
+            holder.iv.load(WebDavImages.url(server, f.path)) {
+                addHeader("Authorization", WebDavImages.basicHeader(user, pass))
+                memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
+                diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
+                size(240)
+                crossfade(true)
+                placeholder(android.R.drawable.ic_menu_gallery)
+                error(android.R.drawable.ic_menu_report_image)
             }
 
             holder.check.visibility = if (isImageSelected(f)) View.VISIBLE else View.GONE

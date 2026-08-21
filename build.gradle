@@ -95,4 +95,6 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
     androidTestImplementation 'androidx.test:runner:1.5.2'
     androidTestImplementation 'androidx.work:work-testing:2.9.0'
+    
+    implementation "io.coil-kt:coil:2.6.0"
 }

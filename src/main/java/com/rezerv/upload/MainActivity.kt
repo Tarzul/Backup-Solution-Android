@@ -83,8 +83,12 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        // ИСПРАВЛЕНО: WebDavClient.init() удалён — метода больше нет в новом клиенте
-        ImageDiskCache.init(applicationContext)
+        coil.Coil.setImageLoader(
+            coil.ImageLoader.Builder(this)
+                .okHttpClient(WebDavClient.httpClient)
+                .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(0.25).build() }
+                .build()
+        )
         initViews()
         setupListeners()
         loadSettings()
@@ -102,7 +106,6 @@ class MainActivity : AppCompatActivity() {
 
     // ИСПРАВЛЕНО: гасим scope адаптера
     override fun onDestroy() {
-        fileAdapter.cancel()
         super.onDestroy()
     }
 

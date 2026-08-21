@@ -22,27 +22,29 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             val taskId = inputData.getString("taskId")
-            
-            // ИСПРАВЛЕНО: если передан taskId — выполняем только его
-            val activeTasks = if (!taskId.isNullOrBlank()) {
-                val task = TaskManager.getById(applicationContext, taskId)
-                if (task != null && task.scheduleEnabled) listOf(task) else emptyList()
+            Log.d(TAG, "▶ doWork: taskId=$taskId, попытка=$runAttemptCount")
+
+            // ИСПРАВЛЕНО: выполняем только задание, для которого сработал будильник
+            val tasksToRun = if (!taskId.isNullOrBlank()) {
+                val t = TaskManager.getById(applicationContext, taskId)
+                if (t != null && t.scheduleEnabled) listOf(t) else emptyList()
             } else {
-                // Fallback: если taskId не передан (старый будильник) — выполняем все
                 TaskManager.getActiveTasks(applicationContext)
             }
-            
-            if (activeTasks.isEmpty()) return@withContext Result.success()
-            
+            if (tasksToRun.isEmpty()) {
+                Log.d(TAG, "Нет заданий для запуска")
+                return@withContext Result.success()
+            }
+
             if (!isNetworkAvailable()) {
+                Log.w(TAG, "Нет сети")
                 return@withContext if (runAttemptCount < MAX_RETRY) Result.retry() else Result.failure()
             }
 
             var totalErrors = 0
-            for (task in activeTasks) {
-                // УСЛОВИЯ ИЗ ПАНЕЛИ «ДОПОЛНИТЕЛЬНО»: Wi-Fi / мобильная / зарядка
+            for (task in tasksToRun) {
                 if (!passesConditions(task)) {
-                    Log.d(TAG, "Задание '${task.name}' пропущено: условия не выполнены")
+                    Log.d(TAG, "'${task.name}' пропущено: условия не выполнены")
                     continue
                 }
                 try {
@@ -53,13 +55,12 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     TaskManager.upsert(applicationContext, task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = status))
                     totalErrors += result.errors
-                    // УВЕДОМЛЕНИЯ ИЗ ПАНЕЛИ «ДОПОЛНИТЕЛЬНО»
                     if (result.errors == 0 && task.notifyOnSuccess)
                         NotificationHelper.showResult(applicationContext, task.name, true, 0)
                     if (result.errors > 0 && task.notifyOnError)
                         NotificationHelper.showResult(applicationContext, task.name, false, result.errors)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Задание '${task.name}' упало с исключением", e)
+                    Log.e(TAG, "'${task.name}' упало с исключением", e)
                     totalErrors++
                     TaskManager.upsert(applicationContext, task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = "error"))
@@ -67,8 +68,8 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                         NotificationHelper.showResult(applicationContext, task.name, false, 1)
                 }
             }
+
             if (totalErrors > 0 && runAttemptCount < MAX_RETRY) Result.retry()
-            else if (totalErrors > 0) Result.failure()
             else Result.success()
         } catch (e: Exception) {
             Log.e(TAG, "Критическая ошибка", e)
@@ -76,7 +77,6 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
     }
 
-    /** Проверяет условия задания: транспорт сети и зарядку. */
     private fun passesConditions(task: SyncTask): Boolean {
         val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return false
@@ -87,7 +87,7 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val transportOk = when {
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> task.useWifi
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> task.useMobile
-            else -> true // Ethernet и прочие транспорты не ограничиваем
+            else -> true
         }
         if (!transportOk) return false
 
@@ -95,9 +95,8 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             val b = applicationContext.registerReceiver(null,
                 IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
             val st = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            val charging = st == BatteryManager.BATTERY_STATUS_CHARGING ||
-                    st == BatteryManager.BATTERY_STATUS_FULL
-            if (!charging) return false
+            if (st != BatteryManager.BATTERY_STATUS_CHARGING && st != BatteryManager.BATTERY_STATUS_FULL)
+                return false
         }
         return true
     }

@@ -10,10 +10,8 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import coil.dispose
+import coil.load
 
 class FileRecyclerViewAdapter(
     private val context: Context,
@@ -26,7 +24,6 @@ class FileRecyclerViewAdapter(
     private var items: List<WebDavRepository.FileInfo> = emptyList()
     var selectedIndices: MutableSet<Int> = mutableSetOf()
     var selectionMode: Boolean = false
-    private val scope = CoroutineScope(Dispatchers.Main)
 
     fun submitList(newItems: List<WebDavRepository.FileInfo>) {
         if (newItems === items) return
@@ -34,10 +31,7 @@ class FileRecyclerViewAdapter(
         notifyDataSetChanged()
     }
 
-    // ИСПРАВЛЕНО: метод для остановки scope адаптера
-    fun cancel() {
-        scope.cancel()
-    }
+    fun cancel() { /* Coil сам отменяет запросы при detach view */ }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         val view = LayoutInflater.from(context).inflate(R.layout.item_file, parent, false)
@@ -60,11 +54,18 @@ class FileRecyclerViewAdapter(
         holder.infoView.text = FileUtils.getInfoText(item)
         holder.infoView.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
 
-        holder.icon.tag = item.path
         if (!item.isDirectory && FileUtils.isImageFile(item.name)) {
-            holder.icon.setImageResource(android.R.drawable.ic_menu_gallery)
-            loadThumb(holder, item)
+            holder.icon.load(WebDavImages.url(serverUrl(), item.path)) {
+                addHeader("Authorization", WebDavImages.basicHeader(user(), pass()))
+                memoryCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
+                diskCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
+                placeholder(android.R.drawable.ic_menu_gallery)
+                error(android.R.drawable.ic_menu_report_image)
+                crossfade(true)
+                size(96, 96)
+            }
         } else {
+            holder.icon.dispose()
             holder.icon.setImageBitmap(null)
             holder.icon.setImageResource(FileUtils.getIconResource(item))
         }
@@ -78,15 +79,6 @@ class FileRecyclerViewAdapter(
         }
 
         holder.itemView.setOnClickListener { onItemClick(item, position) }
-    }
-
-    private fun loadThumb(holder: ViewHolder, item: WebDavRepository.FileInfo) {
-        scope.launch {
-            val bmp = RemoteImageLoader.loadThumbnail(serverUrl(), user(), pass(), item.path)
-            if (holder.icon.tag == item.path && bmp != null) {
-                holder.icon.setImageBitmap(bmp)
-            }
-        }
     }
 
     override fun getItemCount(): Int = items.size

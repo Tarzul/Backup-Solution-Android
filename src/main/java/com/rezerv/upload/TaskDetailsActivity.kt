@@ -159,20 +159,41 @@ class TaskDetailsActivity : AppCompatActivity() {
     private fun runTaskNow() {
         val t = currentTask ?: return
         lifecycleScope.launch {
+            val startTime = System.currentTimeMillis()
+            
+            // НОВОЕ: создаём live-запись СРАЗУ при нажатии ▶ ЗАПУСК
+            HistoryManager.createLiveRecord(this@TaskDetailsActivity, startTime, t.name, "user")
+            
             Toast.makeText(this@TaskDetailsActivity, "Запуск синхронизации...", Toast.LENGTH_SHORT).show()
+            
             val result = withContext(Dispatchers.IO) {
-                SyncEngine.runTask(this@TaskDetailsActivity, t, trigger = "user") { }
+                SyncEngine.runTask(
+                    this@TaskDetailsActivity, 
+                    t, 
+                    trigger = "user",
+                    startTime = startTime,   // НОВОЕ
+                    onProgress = { },
+                    onLiveUpdate = { fileName, fileIndex, totalFiles ->
+                        HistoryManager.updateLiveRecord(
+                            this@TaskDetailsActivity, startTime, fileName, fileIndex, totalFiles)
+                    }
+                )
             }
+            
             val updated = t.copy(
                 lastRun = System.currentTimeMillis(),
                 lastStatus = if (result.errors == 0) "ok" else "error")
             withContext(Dispatchers.IO) { TaskManager.upsert(this@TaskDetailsActivity, updated) }
             currentTask = updated
             AlarmScheduler.scheduleNext(this@TaskDetailsActivity)
-            updateUI()
+            
+            // Показываем результат и возвращаемся в MainActivity (где видна история с live-прогрессом)
             Toast.makeText(this@TaskDetailsActivity,
-                if (result.errors == 0) "Синхронизация завершена" else "Завершено с ошибками: ${result.errors}",
+                if (result.errors == 0) "✓ Синхронизация завершена" else "✗ Завершено с ошибками: ${result.errors}",
                 Toast.LENGTH_SHORT).show()
+            
+            // НОВОЕ: закрываем активность, чтобы пользователь увидел обновлённую историю
+            finish()
         }
     }
 

@@ -23,10 +23,12 @@ object SyncEngine {
     fun runTask(
         context: Context, task: SyncTask,
         trigger: String = "schedule",
-        onProgress: ((String) -> Unit)? = null
+        startTime: Long = System.currentTimeMillis(),
+        onProgress: ((String) -> Unit)? = null,
+        onLiveUpdate: ((String, Int, Int) -> Unit)? = null
     ): SyncResult {
-        val startTime = System.currentTimeMillis()
         val progress: (String) -> Unit = { m -> onProgress?.invoke(m) }
+        val live: (String, Int, Int) -> Unit = { name, idx, total -> onLiveUpdate?.invoke(name, idx, total) }
         val (serverRaw, user, pass) = SecurePrefs.loadCredentials(context)
         val server = WebDavRepository.normalizeBaseUrl(serverRaw) ?: ""
         val res = SideResult()
@@ -41,24 +43,24 @@ object SyncEngine {
                     val localUri = task.leftLocalUri; val webPath = task.rightWebdavPath
                     ensureRemoteFolder(server, user, pass, webPath, progress, res, "Справа")
                     when (task.syncType) {
-                        "to_right" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Справа", res)
-                        "to_left" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Слева", res)
+                        "to_right" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Справа", res, live)
+                        "to_left" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Слева", res, live)
                         else -> {
                             val d = doc(context, localUri, progress, res)
-                            uploadLocal(context, d, server, webPath, user, pass, progress, "Справа", res)
-                            downloadTo(context, webPath, d, server, user, pass, progress, "Слева", res)
+                            uploadLocal(context, d, server, webPath, user, pass, progress, "Справа", res, live)
+                            downloadTo(context, webPath, d, server, user, pass, progress, "Слева", res, live)
                         }
                     }
                 } else {
                     val localUri = task.rightLocalUri; val webPath = task.leftWebdavPath
                     ensureRemoteFolder(server, user, pass, webPath, progress, res, "Слева")
                     when (task.syncType) {
-                        "to_right" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Справа", res)
-                        "to_left" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Слева", res)
+                        "to_right" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Справа", res, live)
+                        "to_left" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Слева", res, live)
                         else -> {
                             val d = doc(context, localUri, progress, res)
-                            uploadLocal(context, d, server, webPath, user, pass, progress, "Слева", res)
-                            downloadTo(context, webPath, d, server, user, pass, progress, "Справа", res)
+                            uploadLocal(context, d, server, webPath, user, pass, progress, "Слева", res, live)
+                            downloadTo(context, webPath, d, server, user, pass, progress, "Справа", res, live)
                         }
                     }
                 }
@@ -71,14 +73,19 @@ object SyncEngine {
 
         val durationMs = System.currentTimeMillis() - startTime
         progress("■ Завершено: загружено ${res.uploaded}, скачано ${res.downloaded}, ошибок ${res.errors}")
-        HistoryManager.addRecord(context, HistoryRecord(
+        
+        // НОВОЕ: заменяем addRecord на finalizeRecord — обновляет live-запись по time
+        HistoryManager.finalizeRecord(context, HistoryRecord(
             time = startTime, durationMs = durationMs, checked = res.checked,
             uploaded = res.uploaded, downloaded = res.downloaded, deleted = 0,
             errors = res.errors, status = if (res.errors == 0) "ok" else "error",
             trigger = trigger, bytesTransferred = res.bytes, transferMs = res.transferMs,
             filesJson = filesToJson(res.files), foldersJson = foldersToJson(res.folders),
-            taskName = task.name
+            taskName = task.name,
+            taskId = task.id,
+            totalFiles = res.checked
         ))
+        
         return SyncResult(res.checked, res.uploaded, res.downloaded, res.errors, durationMs)
     }
 
@@ -91,11 +98,22 @@ object SyncEngine {
     // ==================== Локально → WebDAV (рекурсивно) ====================
     private fun uploadLocal(
         context: Context, dir: DocumentFile?, server: String, webPath: String,
-        user: String, pass: String, progress: (String) -> Unit, side: String, res: SideResult
+        user: String, pass: String, progress: (String) -> Unit, side: String, res: SideResult,
+        live: (String, Int, Int) -> Unit   // НОВОЕ
     ) {
         if (dir == null) return
+        // НОВОЕ: показываем в live-карточке, что идёт листинг папки
+        live("📋 Список (загрузка): ${webPath.substringAfterLast('/')}/", 0, 0)
         val remote = listRemote(server, user, pass, webPath, progress, res) ?: return
         val remoteFiles = remote.filter { !it.isDir }.associate { it.name to it.size }
+        
+        // НОВОЕ: считаем общее количество файлов ДО цикла (для прогресса)
+        val allFiles = dir.listFiles().filter {
+            it.isFile && !it.isDirectory && !isJunkFile(it.name ?: "") && (it.length() > 0L)
+        }
+        val totalToUpload = allFiles.size
+        var fileIndex = 0
+        
         for (f in dir.listFiles()) {
             val name = f.name ?: continue
             
@@ -103,11 +121,12 @@ object SyncEngine {
             if (isJunkFile(name)) continue
             
             if (f.isDirectory) {
-                // ИСПРАВЛЕНО: пропускаем мусорные папки
-                if (name.startsWith(".") || name == ".thumbnails") continue
+                // ИСПРАВЛЕНО: пропускаем мусорные папки (cache, thumbnails, trashes...)
+                if (isJunkFolder(name)) continue
                 val sub = webPath.trimEnd('/') + "/" + name
                 ensureRemoteFolder(server, user, pass, sub, progress, res, side)
-                uploadLocal(context, f, server, sub, user, pass, progress, side, res)
+                // НОВОЕ: передаём live в рекурсивный вызов
+                uploadLocal(context, f, server, sub, user, pass, progress, side, res, live)
                 continue
             }
             if (!f.isFile) continue
@@ -116,6 +135,10 @@ object SyncEngine {
             if (f.length() <= 0L) continue
             
             res.checked++
+            fileIndex++
+            // НОВОЕ: уведомляем UI о текущем файле
+            live(name, fileIndex, totalToUpload)
+            
             val rSize = remoteFiles[name]
             if (rSize != null && rSize == f.length()) continue
             progress("   ⬆ $name")
@@ -148,6 +171,8 @@ object SyncEngine {
     private fun isJunkFile(name: String): Boolean {
         val lower = name.lowercase()
         return lower.startsWith(".") ||
+                lower == "cache" ||
+                lower.startsWith("cache (") ||
                 lower.endsWith(".tmp") ||
                 lower.endsWith(".crdownload") ||
                 lower.startsWith("~") ||
@@ -155,27 +180,60 @@ object SyncEngine {
                 lower == "thumbdata" ||
                 lower.startsWith("thumbdata3_") ||
                 lower.startsWith("thumbdata4_")
-    }    
+    }  
+
+    /** Фильтр мусорных папок, которые не нужно синхронизировать */
+    private fun isJunkFolder(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.startsWith(".") ||
+                lower == "cache" ||
+                lower == "caches" ||
+                lower == "thumbnails" ||
+                lower == "trashes" ||
+                lower == "lost.dir" ||
+                lower == "temp" ||
+                lower == "tmp" ||
+                lower == "android"   // Android/data, Android/obb — данные приложений
+    }      
 
     // ==================== WebDAV → локально (рекурсивно) ====================
     private fun downloadTo(
         context: Context, webPath: String, dir: DocumentFile?, server: String,
-        user: String, pass: String, progress: (String) -> Unit, side: String, res: SideResult
+        user: String, pass: String, progress: (String) -> Unit, side: String, res: SideResult,
+        live: (String, Int, Int) -> Unit   // НОВОЕ
     ) {
         if (dir == null) return
+        live("📋 Список (скачивание): ${webPath.substringAfterLast('/')}/", 0, 0)
         val entries = listRemote(server, user, pass, webPath, progress, res) ?: return
+        
+        // НОВОЕ: считаем общее количество файлов ДО цикла
+        val fileEntries = entries.filter { !it.isDir }
+        val totalToDownload = fileEntries.size
+        var fileIndex = 0
         val localChildren = dir.listFiles()
+        
         for (e in entries) {
             val remote = webPath.trimEnd('/') + "/" + e.name
+            
+            // ИСПРАВЛЕНО: мусор с сервера не скачиваем и не заходим в мусорные папки
+            if (isJunkFile(e.name) || isJunkFolder(e.name)) continue
+            
             if (e.isDir) {
                 val sub = localChildren.firstOrNull { it.isDirectory && it.name == e.name }
                     ?: dir.createDirectory(e.name) ?: continue
-                downloadTo(context, remote, sub, server, user, pass, progress, side, res)  // рекурсия
+                // НОВОЕ: передаём live в рекурсивный вызов
+                downloadTo(context, remote, sub, server, user, pass, progress, side, res, live)
                 continue
             }
             res.checked++
-            val existing = localChildren.firstOrNull { !it.isDirectory && it.name == e.name }
+            val existing = dir.findFile(e.name)?.takeIf { it.isFile }
+                ?: localChildren.firstOrNull { !it.isDirectory && it.name == e.name }
             if (existing != null && existing.length() == e.size) continue   // не изменился
+            
+            fileIndex++
+            // НОВОЕ: уведомляем UI о текущем файле
+            live(e.name, fileIndex, totalToDownload)
+            
             progress("   ⬇ ${e.name}")
             val t0 = System.currentTimeMillis()
             var resp: okhttp3.Response? = null

@@ -7,8 +7,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.delay     
+import kotlinx.coroutines.isActive  
 import kotlinx.coroutines.launch
-
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     data class UiState(
@@ -18,21 +19,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val selectedIndices: Set<Int> = emptySet(),
         val selectionMode: Boolean = false,
         val log: String = "",
-        val uploadProgress: UploadProgress? = null
-    )
-
-    data class UploadProgress(
-        val currentFile: Int,
-        val totalFiles: Int,
-        val fileName: String,
-        val bytesUploaded: Long,
-        val totalBytes: Long
     )
 
     sealed class Event {
         data class ShowToast(val message: String) : Event()
         data class SwitchTab(val tab: Int) : Event()
-        data class UploadFinished(val success: Int, val total: Int) : Event()
     }
 
     private val _uiState = MutableLiveData(UiState())
@@ -207,16 +198,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         appendLog("=== uploadFilesToPath ===")
         appendLog("Сервер: $server")
-        appendLog("Пользователь: $user")
         appendLog("Папка: $targetPath")
         appendLog("Файлов: ${uris.size}")
         if (uris.isEmpty()) {
             _events.value = Event.ShowToast("Нет файлов для загрузки")
-            appendLog("✗ Нет файлов")
             return
         }
-                viewModelScope.launch {
-            appendLog("Корутина запущена")
+        viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server)
             if (base == null) {
                 appendLog("✗ Неверный адрес сервера")
@@ -227,19 +215,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var success = 0
             var failed = 0
             val startTime = System.currentTimeMillis()
-            
-            // НОВОЕ: собираем детали файлов для истории
+
+            // НОВОЕ: live-запись + переключение на вкладку ИСТОРИЯ (как у заданий)
+            HistoryManager.createLiveRecord(getApplication(), startTime, "Ручная загрузка", "user")
+            refreshHistory()
+            _events.value = Event.SwitchTab(3)
+
+            val ticker = viewModelScope.launch {
+                while (isActive) {
+                    delay(1000)
+                    refreshHistory()
+                }
+            }
+
             val fileDetails = mutableListOf<SyncFileDetail>()
             var totalBytes = 0L
             var totalTransferMs = 0L
-            
+
             uris.forEachIndexed { index, uri ->
                 val meta = WebDavRepository.getFileMetadata(getApplication(), uri)
                 val remotePath = targetPath.trimEnd('/') + "/" + meta.name
                 appendLog("Загрузка: ${meta.name} -> $remotePath (${meta.size} байт)")
-                _uiState.value = _uiState.value?.copy(
-                    uploadProgress = UploadProgress(index + 1, total, meta.name, 0, meta.size)
-                )
+
+                // НОВОЕ: live-прогресс в историю
+                HistoryManager.updateLiveRecord(getApplication(), startTime, meta.name, index + 1, total)
+
                 val fileStart = System.currentTimeMillis()
                 try {
                     val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
@@ -248,7 +248,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         failed++
                         return@forEachIndexed
                     }
-                  
                     val code = inputStream.use { input ->
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             WebDavClient.put(
@@ -258,13 +257,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     val fileMs = System.currentTimeMillis() - fileStart
-                    _uiState.value = _uiState.value?.copy(
-                        uploadProgress = _uiState.value?.uploadProgress?.copy(bytesUploaded = meta.size)
-                    )
                     if (code in 200..299) {
                         appendLog("✓ ${meta.name} загружен (HTTP $code)")
                         success++
-                        // НОВОЕ: сохраняем детали успешной загрузки
                         fileDetails.add(SyncFileDetail(meta.name, meta.size, fileMs, "Пользователь"))
                         totalBytes += meta.size
                         totalTransferMs += fileMs
@@ -273,35 +268,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         failed++
                     }
                 } catch (e: Exception) {
-                    appendLog("✗ Исключение при загрузке ${meta.name}: ${e.javaClass.simpleName}: ${e.message}")
+                    appendLog("✗ ${meta.name}: ${e.javaClass.simpleName}: ${e.message}")
                     failed++
                 }
             }
-            _uiState.value = _uiState.value?.copy(uploadProgress = null)
+
+            ticker.cancel()
             val durationMs = System.currentTimeMillis() - startTime
-            
-            // ИСПРАВЛЕНО: детализация файлов теперь пишется в историю
-            HistoryManager.addRecord(
-                getApplication(),
-                HistoryRecord(
-                    time = startTime,
-                    durationMs = durationMs,
-                    checked = total,
-                    uploaded = success,
-                    downloaded = 0,
-                    deleted = 0,
-                    errors = failed,
-                    status = if (failed == 0) "ok" else "error",
-                    trigger = "user",
-                    bytesTransferred = totalBytes,
-                    transferMs = totalTransferMs,
-                    filesJson = filesToJson(fileDetails),
-                    taskName = "Ручная загрузка"
-                )
-            )
+
+            HistoryManager.finalizeRecord(getApplication(), HistoryRecord(
+                time = startTime,
+                durationMs = durationMs,
+                checked = total,
+                uploaded = success,
+                downloaded = 0,
+                deleted = 0,
+                errors = failed,
+                status = if (failed == 0) "ok" else "error",
+                trigger = "user",
+                bytesTransferred = totalBytes,
+                transferMs = totalTransferMs,
+                filesJson = filesToJson(fileDetails),
+                taskName = "Ручная загрузка",
+                totalFiles = total
+            ))
+
             appendLog("Завершено: успешно $success, ошибок $failed")
             _events.value = Event.ShowToast("Загрузка: $success / $total")
-            _events.value = Event.UploadFinished(success, total)
+            // picked очищается в MainActivity по ShowToast с префиксом "Загрузка:"
+            refreshHistory()
             browseServer(server, _uiState.value?.currentPath ?: "/", user, pass)
         }
     }
@@ -424,19 +419,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun runTaskNow(t: SyncTask) {
         viewModelScope.launch {
+            val startTime = System.currentTimeMillis()
+            
+            // НОВОЕ: создаём live-запись СРАЗУ при нажатии ▶ ЗАПУСК
+            HistoryManager.createLiveRecord(getApplication(), startTime, t.name, "user", t.id)
+            refreshHistory()
+            _events.value = Event.SwitchTab(3)   // переключаемся на вкладку ИСТОРИЯ
             _events.value = Event.ShowToast("Запуск синхронизации...")
-            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                SyncEngine.runTask(getApplication(), t, trigger = "user") { m -> appendLog(m) }
+            
+            // Периодически обновляем UI, пока идёт задание
+            val ticker = viewModelScope.launch {
+                while (isActive) {
+                    delay(1000)
+                    refreshHistory()
+                }
             }
+            
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                SyncEngine.runTask(
+                    getApplication(), t, trigger = "user",
+                    startTime = startTime,   // НОВОЕ
+                    onProgress = { m -> appendLog(m) },
+                    onLiveUpdate = { name, idx, total ->
+                        HistoryManager.updateLiveRecord(getApplication(), startTime, name, idx, total)
+                    }
+                )
+            }
+            
+            ticker.cancel()
             val updated = t.copy(
                 lastRun = System.currentTimeMillis(),
                 lastStatus = if (result.errors == 0) "ok" else "error"
             )
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { 
-                TaskManager.upsert(getApplication(), updated) 
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                TaskManager.upsert(getApplication(), updated)
             }
             AlarmScheduler.scheduleNext(getApplication())
             refreshTasks()
+            refreshHistory()
         }
     }
 
@@ -587,13 +607,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ==================== Карточки истории ====================
     fun buildHistoryCard(context: Context, r: HistoryRecord): android.view.View {
+        val isRunning = r.status == "running"
         val isOk = r.status == "ok"
+        val cardColor = when {
+            isRunning -> 0xFF1E3A5F.toInt()
+            isOk -> 0xFF2D4A2D.toInt()
+            else -> 0xFF4A2D2D.toInt()
+        }
+        val strokeColor = when {
+            isRunning -> 0xFF64B5F6.toInt()
+            isOk -> 0xFF81C784.toInt()
+            else -> 0xFFE57373.toInt()
+        }
+        
         val card = android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             val gd = android.graphics.drawable.GradientDrawable()
-            gd.setColor(if (isOk) 0xFF2D4A2D.toInt() else 0xFF4A2D2D.toInt())
+            gd.setColor(cardColor)
             gd.cornerRadius = 24f
-            gd.setStroke(2, if (isOk) 0xFF81C784.toInt() else 0xFFE57373.toInt())
+            gd.setStroke(2, strokeColor)
             background = gd
             setPadding(24, 20, 24, 20)
             val lp = android.widget.LinearLayout.LayoutParams(
@@ -602,15 +634,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             lp.setMargins(0, 8, 0, 8)
             layoutParams = lp
-            setOnClickListener {
-                context.startActivity(
-                    android.content.Intent(context, HistoryDetailsActivity::class.java)
-                        .putExtra("time", r.time)
-                )
+            if (!isRunning) {
+                setOnClickListener {
+                    context.startActivity(
+                        android.content.Intent(context, HistoryDetailsActivity::class.java)
+                            .putExtra("time", r.time)
+                    )
+                }
             }
         }
         
-        // Заголовок
         val top = android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -620,60 +653,100 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             setTextColor(0xFFFFFFFF.toInt())
             textSize = 16f
             setTypeface(null, android.graphics.Typeface.BOLD)
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                0,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
         top.addView(android.widget.TextView(context).apply {
-            text = if (isOk) "✔" else "✖"
-            setTextColor(if (isOk) 0xFF81C784.toInt() else 0xFFE57373.toInt())
+            text = when {
+                isRunning -> "⏳"
+                isOk -> "✔"
+                else -> "✖"
+            }
+            setTextColor(when {
+                isRunning -> 0xFF64B5F6.toInt()
+                isOk -> 0xFF81C784.toInt()
+                else -> 0xFFE57373.toInt()
+            })
             textSize = 22f
         })
         card.addView(top)
         
-        // Основная статистика
-        card.addView(cardRow(context, "📅 ${formatDateTime(r.time)}", "⏱ ${formatDuration(r.durationMs)}"))
-        card.addView(cardRow(context, "🔍 Проверено: ${r.checked}", "⬆ Передано: ${r.uploaded + r.downloaded}"))
-        
-        // НОВОЕ: детализация файлов
-        if (r.uploaded > 0 || r.downloaded > 0) {
-            card.addView(cardRow(context, "⬆ Загружено: ${r.uploaded} ф.", "⬇ Скачано: ${r.downloaded} ф."))
-        }
-        if (r.deleted > 0) {
-            card.addView(cardRow(context, "🗑 Удалено: ${r.deleted}", ""))
-        }
-        
-        // НОВОЕ: объем данных и скорость
-        if (r.bytesTransferred > 0) {
-            val speed = if (r.transferMs > 0) {
-                val mb = r.bytesTransferred / 1048576.0
-                val sec = r.transferMs / 1000.0
-                val v = mb / sec
-                if (v >= 1) String.format("%.1f МБ/с", v) else "${FileUtils.formatSize((r.bytesTransferred / (r.transferMs / 1000.0)).toLong())}/с"
-            } else "—"
-            card.addView(cardRow(context, "💾 ${FileUtils.formatSize(r.bytesTransferred)}", "⚡ $speed"))
-        }
-        
-        card.addView(cardRow(context, "✗ Ошибок: ${r.errors}", triggerLabel(r.trigger)))
-        
-        // НОВОЕ: превью первых файлов (если есть)
-        val files = parseFilesJson(r.filesJson)
-        if (files.isNotEmpty()) {
-            val previewCount = minOf(3, files.size)
-            val preview = files.take(previewCount).joinToString(", ") { it.name }
-            card.addView(android.widget.TextView(context).apply {
-                text = "📄 ${if (files.size > 3) "$preview..." else preview}"
-                setTextColor(0xFFAAAAAA.toInt())
-                textSize = 11f
-                val lp = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                lp.topMargin = 6
-                layoutParams = lp
-            })
+        if (isRunning) {
+            // НОВОЕ: live-карточка
+            val elapsed = System.currentTimeMillis() - r.liveStartedAt
+            card.addView(cardRow(context, "🔄 Выполняется...", "⏱ ${formatDuration(elapsed)}"))
+            
+            if (r.totalFiles > 0) {
+                val pb = android.widget.ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    max = r.totalFiles
+                    progress = r.currentFileIndex
+                    val lp = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    lp.topMargin = 12
+                    layoutParams = lp
+                }
+                card.addView(pb)
+                
+                card.addView(android.widget.TextView(context).apply {
+                    text = "📄 ${r.currentFileIndex} из ${r.totalFiles}"
+                    setTextColor(0xFFCCCCCC.toInt())
+                    textSize = 13f
+                    val lp = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    lp.topMargin = 4
+                    layoutParams = lp
+                })
+            }
+            
+            if (r.currentFileName.isNotEmpty()) {
+                card.addView(android.widget.TextView(context).apply {
+                    text = "▸ ${r.currentFileName}"
+                    setTextColor(0xFF64B5F6.toInt())
+                    textSize = 12f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    val lp = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    lp.topMargin = 4
+                    layoutParams = lp
+                })
+            }
+            
+            if (r.currentFileIndex > 0 && r.totalFiles > r.currentFileIndex) {
+                val avgPerFile = elapsed.toFloat() / r.currentFileIndex
+                val etaMs = (avgPerFile * (r.totalFiles - r.currentFileIndex)).toLong()
+                card.addView(android.widget.TextView(context).apply {
+                    text = "⏱ Осталось примерно: ${formatDuration(etaMs)}"
+                    setTextColor(0xFFAAAAAA.toInt())
+                    textSize = 11f
+                    val lp = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    lp.topMargin = 4
+                    layoutParams = lp
+                })
+            }
+        } else {
+            // Финальная карточка
+            card.addView(cardRow(context, "📅 ${formatDateTime(r.time)}", "⏱ ${formatDuration(r.durationMs)}"))
+            card.addView(cardRow(context, "🔍 Проверено: ${r.checked}", "⬆ Передано: ${r.uploaded + r.downloaded}"))
+            if (r.uploaded > 0 || r.downloaded > 0) {
+                card.addView(cardRow(context, "⬆ Загружено: ${r.uploaded} ф.", "⬇ Скачано: ${r.downloaded} ф."))
+            }
+            if (r.bytesTransferred > 0) {
+                val speed = if (r.transferMs > 0) {
+                    val v = (r.bytesTransferred / 1048576.0) / (r.transferMs / 1000.0)
+                    if (v >= 1) String.format("%.1f МБ/с", v) else "${FileUtils.formatSize((r.bytesTransferred / (r.transferMs / 1000.0)).toLong())}/с"
+                } else "—"
+                card.addView(cardRow(context, "💾 ${FileUtils.formatSize(r.bytesTransferred)}", "⚡ $speed"))
+            }
+            card.addView(cardRow(context, "✗ Ошибок: ${r.errors}", triggerLabel(r.trigger)))
         }
         
         return card
@@ -739,7 +812,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun formatDateTime(time: Long): String =
         java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date(time))
 
-    private fun formatDuration(ms: Long): String = "${ms / 1000 / 60}м ${ms / 1000 % 60}с"
+        private fun formatDuration(ms: Long): String {
+        val totalSec = ms / 1000
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return when {
+            h > 0 -> "${h}ч ${m}м"
+            m > 0 -> "${m}м ${s}с"
+            else -> "${s}с"
+        }
+    }
 
     private fun triggerLabel(t: String): String = when (t) {
         "user" -> "👤 Пользователь"

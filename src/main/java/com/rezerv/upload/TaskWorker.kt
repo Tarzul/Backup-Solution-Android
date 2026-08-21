@@ -24,7 +24,6 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             val taskId = inputData.getString("taskId")
             Log.d(TAG, "▶ doWork: taskId=$taskId, попытка=$runAttemptCount")
 
-            // ИСПРАВЛЕНО: выполняем только задание, для которого сработал будильник
             val tasksToRun = if (!taskId.isNullOrBlank()) {
                 val t = TaskManager.getById(applicationContext, taskId)
                 if (t != null && t.scheduleEnabled) listOf(t) else emptyList()
@@ -48,9 +47,23 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     continue
                 }
                 try {
-                    val result = SyncEngine.runTask(applicationContext, task, trigger = "schedule") {
-                        Log.d(TAG, "  $it")
-                    }
+                    // НОВОЕ: фиксируем время старта задания для live-записи
+                    val taskStartTime = System.currentTimeMillis()
+                    
+                    // НОВОЕ: создаём live-запись СРАЗУ при запуске задания (status="running")
+                    HistoryManager.createLiveRecord(applicationContext, taskStartTime, task.name, "schedule", task.id)
+                    
+                    val result = SyncEngine.runTask(
+                        applicationContext, 
+                        task, 
+                        trigger = "schedule",
+                        startTime = taskStartTime,   // НОВОЕ
+                        onProgress = { Log.d(TAG, "  $it") },
+                        onLiveUpdate = { fileName, fileIndex, totalFiles ->
+                            HistoryManager.updateLiveRecord(
+                                applicationContext, taskStartTime, fileName, fileIndex, totalFiles)
+                        }
+                    )
                     val status = if (result.errors == 0) "ok" else "error"
                     TaskManager.upsert(applicationContext, task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = status))
@@ -83,8 +96,6 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         if (cm != null) {
             val caps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                 cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } else null
-            // ИСПРАВЛЕНО: в фоне (doze/EMUI) activeNetwork/caps могут быть null —
-            // тогда НЕ блокируем по типу транспорта: будильник не зря разбудил устройство
             if (caps != null) {
                 val wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                 val cell = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
@@ -111,13 +122,10 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         return true
     }
 
-    // ИСПРАВЛЕНО: если в фоне не удалось определить сеть (doze/EMUI) — не блокируем,
-    // реальный HTTP-запрос сам покажет, есть ли связь. Иначе задания молча
-    // пропускаются при каждом тике будильника, а пользователь видит пустую историю.
     private fun isNetworkAvailable(): Boolean {
         val cm = applicationContext
             .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return true   // не удалось получить менеджер — предполагаем сеть, OkHttp разберётся
+            ?: return true
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val n = cm.activeNetwork
@@ -133,7 +141,7 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             }
         } catch (e: Exception) {
             Log.w(TAG, "isNetworkAvailable exception: ${e.message}")
-            true   // при ошибке — предполагаем сеть, OkHttp упадёт с IOException
+            true
         }
     }
 }

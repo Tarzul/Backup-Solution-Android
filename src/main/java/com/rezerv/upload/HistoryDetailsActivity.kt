@@ -25,6 +25,7 @@ class HistoryDetailsActivity : AppCompatActivity() {
     private lateinit var folderAdapter: HistoryDetailsAdapter.FolderAdapter
     private lateinit var rvFiles: RecyclerView
     private lateinit var rvFolders: RecyclerView
+    private lateinit var llErrors: LinearLayout    
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,6 +39,7 @@ class HistoryDetailsActivity : AppCompatActivity() {
         rvFolders.layoutManager = LinearLayoutManager(this)
         rvFiles.setNestedScrollingEnabled(false)
         rvFolders.setNestedScrollingEnabled(false)
+        llErrors = findViewById(R.id.llErrorsList)
 
         fileAdapter = HistoryDetailsAdapter.FileAdapter(emptyList())
         folderAdapter = HistoryDetailsAdapter.FolderAdapter(emptyList())
@@ -66,6 +68,13 @@ class HistoryDetailsActivity : AppCompatActivity() {
             val isVisible = rvFolders.visibility == View.VISIBLE
             rvFolders.visibility = if (isVisible) View.GONE else View.VISIBLE
             foldersArrow.text = if (isVisible) "›" else "⌄"
+        }
+
+        val errorsArrow = findViewById<TextView>(R.id.tvHistErrorsArrow)
+        findViewById<View>(R.id.llErrorsHeader).setOnClickListener {
+            val isVisible = llErrors.visibility == View.VISIBLE
+            llErrors.visibility = if (isVisible) View.GONE else View.VISIBLE
+            errorsArrow.text = if (isVisible) "›" else "⌄"
         }
     }
 
@@ -101,6 +110,27 @@ class HistoryDetailsActivity : AppCompatActivity() {
         val folders = HistoryManager.parseFolders(r.foldersJson)
         findViewById<TextView>(R.id.tvHistFoldersTitle).text = "Папок создано (${folders.size})"
         folderAdapter.updateData(folders)
+
+        val errors = HistoryManager.parseErrors(r.errorsJson)
+        findViewById<TextView>(R.id.tvHistErrorsTitle).text = "Ошибок (${errors.size})"
+        llErrors.removeAllViews()
+        if (errors.isEmpty()) {
+            llErrors.addView(TextView(this).apply {
+                text = "Ошибок нет ✓"
+                setTextColor(Color.parseColor("#FF81C784"))
+                textSize = 13f
+                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+            })
+        } else {
+            errors.forEach { e ->
+                llErrors.addView(TextView(this).apply {
+                    text = "✗ ${e.name}\n   ${e.reason}"
+                    setTextColor(Color.parseColor("#FFE57373"))
+                    textSize = 13f
+                    setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+                })
+            }
+        }
     }
 
     private fun addRow(container: LinearLayout, label: String, value: String) {

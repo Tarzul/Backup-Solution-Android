@@ -175,6 +175,48 @@
                 tools:visibility="visible"
                 tools:listitem="@layout/item_history_folder" />
 
+            <!-- НОВОЕ: Заголовок ошибок -->
+            <LinearLayout
+                android:id="@+id/llErrorsHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingTop="16dp"
+                android:paddingBottom="16dp"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:id="@+id/tvHistErrorsTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    tools:text="Ошибок (2)"/>
+
+                <TextView
+                    android:id="@+id/tvHistErrorsArrow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="›"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="24sp"
+                    android:textStyle="bold"
+                    android:contentDescription="Раскрыть список ошибок"/>
+            </LinearLayout>
+
+            <!-- Список ошибок (LinearLayout) -->
+            <LinearLayout
+                android:id="@+id/llErrorsList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

@@ -81,36 +81,6 @@ object WebDavRepository {
             }
         }
 
-    // ==================== Загрузка ====================
-    suspend fun uploadFile(
-        server: String,
-        remotePath: String,
-        inputStream: InputStream,
-        size: Long,
-        user: String,
-        pass: String,
-        onProgress: ((Long) -> Unit)? = null
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val progressStream = object : java.io.FilterInputStream(inputStream) {
-                var totalRead = 0L
-                override fun read(b: ByteArray?, off: Int, len: Int): Int {
-                    val bytesRead = super.read(b, off, len)
-                    if (bytesRead > 0) {
-                        totalRead += bytesRead
-                        onProgress?.invoke(totalRead)
-                    }
-                    return bytesRead
-                }
-            }
-            val code = WebDavClient.put(server + encodePath(remotePath), user, pass, progressStream)
-            code in 200..299
-        } catch (e: Exception) {
-            Log.e(TAG, "Upload failed", e)
-            false
-        }
-    }
-
     // ==================== Скачивание ====================
     suspend fun downloadFile(
         context: Context,

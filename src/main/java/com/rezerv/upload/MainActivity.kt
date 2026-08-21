@@ -47,10 +47,6 @@ class MainActivity : AppCompatActivity() {
     // Файлы (RecyclerView)
     private lateinit var tvCurrentPath: TextView
     private lateinit var rvFiles: RecyclerView
-    private lateinit var pbFiles: ProgressBar
-    private lateinit var pbBytes: ProgressBar
-    private lateinit var tvProgressFiles: TextView
-    private lateinit var tvProgressBytes: TextView
     private lateinit var btnBack: Button
     private lateinit var btnNewFolder: Button
     private lateinit var llSelection: LinearLayout
@@ -150,10 +146,6 @@ class MainActivity : AppCompatActivity() {
         btnConnect = findViewById(R.id.btnConnect)
         tvCurrentPath = findViewById(R.id.tvCurrentPath)
         rvFiles = findViewById(R.id.rvFiles)
-        pbFiles = findViewById(R.id.pbFiles)
-        pbBytes = findViewById(R.id.pbBytes)
-        tvProgressFiles = findViewById(R.id.tvProgressFiles)
-        tvProgressBytes = findViewById(R.id.tvProgressBytes)
         btnBack = findViewById(R.id.btnBack)
         btnNewFolder = findViewById(R.id.btnNewFolder)
         llSelection = findViewById(R.id.llSelection)
@@ -353,7 +345,6 @@ class MainActivity : AppCompatActivity() {
     private fun observeViewModel() {
         viewModel.uiState.observe(this, Observer { state ->
             updateFileList(state.files)
-            updateProgress(state)
             updateLog(state.log)
             updateSelectionUI(state.selectionMode, state.selectedIndices.size)
             tvCurrentPath.text = "Путь: ${state.currentPath}"
@@ -362,10 +353,13 @@ class MainActivity : AppCompatActivity() {
         viewModel.history.observe(this, Observer { records -> refreshHistory(records) })
         viewModel.events.observe(this, Observer { event ->
             when (event) {
-                is MainViewModel.Event.ShowToast ->
+                is MainViewModel.Event.ShowToast -> {
                     Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
+                    if (event.message.startsWith("Загрузка:")) {
+                        picked = emptyList()
+                    }
+                }
                 is MainViewModel.Event.SwitchTab -> switchToTab(event.tab)
-                is MainViewModel.Event.UploadFinished -> picked = emptyList()
             }
         })
     }
@@ -375,29 +369,6 @@ class MainActivity : AppCompatActivity() {
         fileAdapter.selectionMode = state?.selectionMode ?: false
         fileAdapter.selectedIndices = state?.selectedIndices?.toMutableSet() ?: mutableSetOf()
         fileAdapter.submitList(files)
-    }
-
-    private fun updateProgress(state: MainViewModel.UiState) {
-        val progress = state.uploadProgress
-        if (progress != null) {
-            pbFiles.max = progress.totalFiles
-            pbFiles.progress = progress.currentFile - 1
-            tvProgressFiles.text = "Файлов: ${progress.currentFile} / ${progress.totalFiles}"
-            tvProgressBytes.text = "${progress.fileName}: ${FileUtils.formatSize(progress.bytesUploaded)} / ${FileUtils.formatSize(progress.totalBytes)}"
-            if (progress.totalBytes > 0) {
-                pbBytes.max = 100
-                pbBytes.progress = ((progress.bytesUploaded * 100) / progress.totalBytes).toInt()
-                pbBytes.isIndeterminate = false
-            } else {
-                pbBytes.isIndeterminate = true
-            }
-        } else {
-            pbFiles.progress = 0
-            pbBytes.progress = 0
-            pbBytes.isIndeterminate = false
-            tvProgressFiles.text = "Файлов: 0 / 0"
-            tvProgressBytes.text = "Загрузка завершена"
-        }
     }
 
     private fun updateLog(log: String) {

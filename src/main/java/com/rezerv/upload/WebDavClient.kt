@@ -103,7 +103,7 @@ object WebDavClient {
     fun get(url: String, user: String, pass: String): Response =
         client(user, pass).newCall(Request.Builder().url(url).get().build()).execute()
 
-    fun put(url: String, user: String, pass: String, inputStream: java.io.InputStream, length: Long): Int {
+    fun put(url: String, user: String, pass: String, inputStream: java.io.InputStream): Int {
 
         val bytes = inputStream.use { it.readBytes() }
         val body = bytes.toRequestBody("application/octet-stream".toMediaType())

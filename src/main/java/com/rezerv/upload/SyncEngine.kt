@@ -124,7 +124,7 @@ object SyncEngine {
                 val input = context.contentResolver.openInputStream(f.uri)
                 if (input == null) { progress("   ✗ $name: не удалось открыть"); res.errors++ }
                 else input.use {
-                    val code = WebDavClient.put(server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name), user, pass, it, f.length())
+                    val code = WebDavClient.put(server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name), user, pass, it)
                     if (code in 200..299) {
                         res.uploaded++; res.bytes += f.length()
                         res.files.add(SyncFileDetail(name, f.length(), System.currentTimeMillis() - t0, side))

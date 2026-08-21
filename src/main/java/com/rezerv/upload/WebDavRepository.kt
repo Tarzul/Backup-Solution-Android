@@ -103,7 +103,7 @@ object WebDavRepository {
                     return bytesRead
                 }
             }
-            val code = WebDavClient.put(server + encodePath(remotePath), user, pass, progressStream, size)
+            val code = WebDavClient.put(server + encodePath(remotePath), user, pass, progressStream)
             code in 200..299
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed", e)

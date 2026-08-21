@@ -215,7 +215,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendLog("✗ Нет файлов")
             return
         }
-        viewModelScope.launch {
+                viewModelScope.launch {
             appendLog("Корутина запущена")
             val base = WebDavRepository.normalizeBaseUrl(server)
             if (base == null) {
@@ -227,6 +227,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var success = 0
             var failed = 0
             val startTime = System.currentTimeMillis()
+            
+            // НОВОЕ: собираем детали файлов для истории
+            val fileDetails = mutableListOf<SyncFileDetail>()
+            var totalBytes = 0L
+            var totalTransferMs = 0L
+            
             uris.forEachIndexed { index, uri ->
                 val meta = WebDavRepository.getFileMetadata(getApplication(), uri)
                 val remotePath = targetPath.trimEnd('/') + "/" + meta.name
@@ -234,6 +240,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value?.copy(
                     uploadProgress = UploadProgress(index + 1, total, meta.name, 0, meta.size)
                 )
+                val fileStart = System.currentTimeMillis()
                 try {
                     val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
                     if (inputStream == null) {
@@ -246,15 +253,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             WebDavClient.put(
                                 base + WebDavRepository.encodePath(remotePath),
-                                user, pass, input, meta.size
+                                user, pass, input
                             )
                         }
                     }
+                    val fileMs = System.currentTimeMillis() - fileStart
                     _uiState.value = _uiState.value?.copy(
                         uploadProgress = _uiState.value?.uploadProgress?.copy(bytesUploaded = meta.size)
                     )
-                    if (code in 200..299) { appendLog("✓ ${meta.name} загружен (HTTP $code)"); success++ }
-                    else { appendLog("✗ ${meta.name}: HTTP $code"); failed++ }
+                    if (code in 200..299) {
+                        appendLog("✓ ${meta.name} загружен (HTTP $code)")
+                        success++
+                        // НОВОЕ: сохраняем детали успешной загрузки
+                        fileDetails.add(SyncFileDetail(meta.name, meta.size, fileMs, "Пользователь"))
+                        totalBytes += meta.size
+                        totalTransferMs += fileMs
+                    } else {
+                        appendLog("✗ ${meta.name}: HTTP $code")
+                        failed++
+                    }
                 } catch (e: Exception) {
                     appendLog("✗ Исключение при загрузке ${meta.name}: ${e.javaClass.simpleName}: ${e.message}")
                     failed++
@@ -262,11 +279,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uiState.value = _uiState.value?.copy(uploadProgress = null)
             val durationMs = System.currentTimeMillis() - startTime
+            
+            // ИСПРАВЛЕНО: детализация файлов теперь пишется в историю
             HistoryManager.addRecord(
                 getApplication(),
                 HistoryRecord(
-                    startTime, durationMs, total, success, 0, 0, failed,
-                    if (failed == 0) "ok" else "error", "user",
+                    time = startTime,
+                    durationMs = durationMs,
+                    checked = total,
+                    uploaded = success,
+                    downloaded = 0,
+                    deleted = 0,
+                    errors = failed,
+                    status = if (failed == 0) "ok" else "error",
+                    trigger = "user",
+                    bytesTransferred = totalBytes,
+                    transferMs = totalTransferMs,
+                    filesJson = filesToJson(fileDetails),
                     taskName = "Ручная загрузка"
                 )
             )
@@ -580,6 +609,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+        
+        // Заголовок
         val top = android.widget.LinearLayout(context).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -601,10 +632,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             textSize = 22f
         })
         card.addView(top)
+        
+        // Основная статистика
         card.addView(cardRow(context, "📅 ${formatDateTime(r.time)}", "⏱ ${formatDuration(r.durationMs)}"))
         card.addView(cardRow(context, "🔍 Проверено: ${r.checked}", "⬆ Передано: ${r.uploaded + r.downloaded}"))
+        
+        // НОВОЕ: детализация файлов
+        if (r.uploaded > 0 || r.downloaded > 0) {
+            card.addView(cardRow(context, "⬆ Загружено: ${r.uploaded} ф.", "⬇ Скачано: ${r.downloaded} ф."))
+        }
+        if (r.deleted > 0) {
+            card.addView(cardRow(context, "🗑 Удалено: ${r.deleted}", ""))
+        }
+        
+        // НОВОЕ: объем данных и скорость
+        if (r.bytesTransferred > 0) {
+            val speed = if (r.transferMs > 0) {
+                val mb = r.bytesTransferred / 1048576.0
+                val sec = r.transferMs / 1000.0
+                val v = mb / sec
+                if (v >= 1) String.format("%.1f МБ/с", v) else "${FileUtils.formatSize((r.bytesTransferred / (r.transferMs / 1000.0)).toLong())}/с"
+            } else "—"
+            card.addView(cardRow(context, "💾 ${FileUtils.formatSize(r.bytesTransferred)}", "⚡ $speed"))
+        }
+        
         card.addView(cardRow(context, "✗ Ошибок: ${r.errors}", triggerLabel(r.trigger)))
+        
+        // НОВОЕ: превью первых файлов (если есть)
+        val files = parseFilesJson(r.filesJson)
+        if (files.isNotEmpty()) {
+            val previewCount = minOf(3, files.size)
+            val preview = files.take(previewCount).joinToString(", ") { it.name }
+            card.addView(android.widget.TextView(context).apply {
+                text = "📄 ${if (files.size > 3) "$preview..." else preview}"
+                setTextColor(0xFFAAAAAA.toInt())
+                textSize = 11f
+                val lp = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                lp.topMargin = 6
+                layoutParams = lp
+            })
+        }
+        
         return card
+    }
+    
+    // НОВОЕ: парсинг JSON файлов из HistoryRecord
+    private fun parseFilesJson(json: String?): List<SyncFileDetail> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+                SyncFileDetail(
+                    name = obj.optString("n", ""),
+                    size = obj.optLong("s", 0),
+                    ms = obj.optLong("m", 0),
+                    side = obj.optString("d", "")
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun cardRow(context: Context, left: String, right: String): android.view.View {
@@ -655,5 +746,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "test" -> "🧪 Тест"
         "schedule" -> "⏰ Расписание"
         else -> "•"
+    }
+
+    private fun filesToJson(list: List<SyncFileDetail>): String {
+        val arr = org.json.JSONArray()
+        for (f in list) arr.put(org.json.JSONObject().apply {
+            put("n", f.name)
+            put("s", f.size)
+            put("m", f.ms)
+            put("d", f.side)
+        })
+        return arr.toString()
     }
 }

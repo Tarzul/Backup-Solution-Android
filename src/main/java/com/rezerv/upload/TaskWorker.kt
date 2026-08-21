@@ -78,37 +78,62 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     private fun passesConditions(task: SyncTask): Boolean {
-        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return false
-        val caps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-            cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } else null
-        if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return false
-
-        val transportOk = when {
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> task.useWifi
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> task.useMobile
-            else -> true
+        val cm = applicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        if (cm != null) {
+            val caps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                cm.activeNetwork?.let { cm.getNetworkCapabilities(it) } else null
+            // ИСПРАВЛЕНО: в фоне (doze/EMUI) activeNetwork/caps могут быть null —
+            // тогда НЕ блокируем по типу транспорта: будильник не зря разбудил устройство
+            if (caps != null) {
+                val wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                val cell = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                if (wifi && !task.useWifi) {
+                    Log.w(TAG, "Пропуск '${task.name}': Wi-Fi запрещён в задании")
+                    return false
+                }
+                if (cell && !task.useMobile) {
+                    Log.w(TAG, "Пропуск '${task.name}': мобильная сеть запрещена в задании")
+                    return false
+                }
+            }
         }
-        if (!transportOk) return false
-
         if (task.onlyCharging) {
             val b = applicationContext.registerReceiver(null,
                 IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
             val st = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            if (st != BatteryManager.BATTERY_STATUS_CHARGING && st != BatteryManager.BATTERY_STATUS_FULL)
+            if (st != BatteryManager.BATTERY_STATUS_CHARGING &&
+                st != BatteryManager.BATTERY_STATUS_FULL) {
+                Log.w(TAG, "Пропуск '${task.name}': только при зарядке, а устройство не заряжается")
                 return false
+            }
         }
         return true
     }
 
+    // ИСПРАВЛЕНО: если в фоне не удалось определить сеть (doze/EMUI) — не блокируем,
+    // реальный HTTP-запрос сам покажет, есть ли связь. Иначе задания молча
+    // пропускаются при каждом тике будильника, а пользователь видит пустую историю.
     private fun isNetworkAvailable(): Boolean {
-        val cm = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return false
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val n = cm.activeNetwork ?: return false
-            cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-        } else @Suppress("DEPRECATION") {
-            cm.activeNetworkInfo?.isConnected == true
+        val cm = applicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return true   // не удалось получить менеджер — предполагаем сеть, OkHttp разберётся
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val n = cm.activeNetwork
+                if (n == null) {
+                    Log.w(TAG, "activeNetwork == null (фон/doze) — предполагаем сеть")
+                    true
+                } else {
+                    cm.getNetworkCapabilities(n)
+                        ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                }
+            } else @Suppress("DEPRECATION") {
+                cm.activeNetworkInfo?.isConnected ?: true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "isNetworkAvailable exception: ${e.message}")
+            true   // при ошибке — предполагаем сеть, OkHttp упадёт с IOException
         }
     }
 }

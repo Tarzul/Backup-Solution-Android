@@ -10,16 +10,18 @@ object SyncEngine {
 
     data class SyncResult(val checked: Int, val uploaded: Int, val downloaded: Int, val errors: Int, val durationMs: Long)
 
-    class SideResult {
+    internal class SideResult {
         var checked = 0; var uploaded = 0; var downloaded = 0
         var bytes = 0L; var transferMs = 0L; var errors = 0
+        var durationMs = 0L
         val files = mutableListOf<SyncFileDetail>()
         val folders = mutableListOf<SyncFolderDetail>()
+        val errorList = mutableListOf<SyncErrorDetail>()
+        internal val listingCache = HashMap<String, MutableList<Entry>>()
     }
 
-    private data class Entry(val name: String, val isDir: Boolean, val size: Long)
+    internal data class Entry(val name: String, val isDir: Boolean, val size: Long, val lastModified: Long = 0L)
 
-    // ==================== Запуск задания ====================
     fun runTask(
         context: Context, task: SyncTask,
         trigger: String = "schedule",
@@ -32,66 +34,75 @@ object SyncEngine {
         val (serverRaw, user, pass) = SecurePrefs.loadCredentials(context)
         val server = WebDavRepository.normalizeBaseUrl(serverRaw) ?: ""
         val res = SideResult()
-        progress("▶ Задание: ${task.name}")
+        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        val wl = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "rezerv:sync")
+        wl.acquire(4 * 60 * 60 * 1000L)
+        try {
+            progress("▶ Задание: ${task.name}")
 
-        if (server.isEmpty()) { progress("✗ Не указан сервер"); res.errors++ }
-        else if (!task.isValid()) { progress("✗ Некорректная пара папок"); res.errors++ }
-        else {
-            val leftLocal = !task.leftIsWebdav
-            try {
-                if (leftLocal) {
-                    val localUri = task.leftLocalUri; val webPath = task.rightWebdavPath
-                    ensureRemoteFolder(server, user, pass, webPath, progress, res, "Справа")
-                    when (task.syncType) {
-                        "to_right" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Справа", res, live)
-                        "to_left" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Слева", res, live)
-                        else -> {
-                            val d = doc(context, localUri, progress, res)
-                            uploadLocal(context, d, server, webPath, user, pass, progress, "Справа", res, live)
-                            downloadTo(context, webPath, d, server, user, pass, progress, "Слева", res, live)
+            if (server.isEmpty()) { progress("✗ Не указан сервер"); res.errors++; res.errorList.add(SyncErrorDetail("Сервер", "не указан")) }
+            else if (!task.isValid()) { progress("✗ Некорректная пара папок"); res.errors++; res.errorList.add(SyncErrorDetail("Задание", "некорректная пара папок")) }
+            else {
+                val leftLocal = !task.leftIsWebdav
+                try {
+                    if (leftLocal) {
+                        val localUri = task.leftLocalUri; val webPath = task.rightWebdavPath
+                        ensureRemoteFolder(server, user, pass, webPath, progress, res, "Справа")
+                        when (task.syncType) {
+                            "to_right" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Справа", res, live)
+                            "to_left" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Слева", res, live)
+                            else -> {
+                                val d = doc(context, localUri, progress, res)
+                                uploadLocal(context, d, server, webPath, user, pass, progress, "Справа", res, live)
+                                downloadTo(context, webPath, d, server, user, pass, progress, "Слева", res, live)
+                            }
+                        }
+                    } else {
+                        val localUri = task.rightLocalUri; val webPath = task.leftWebdavPath
+                        ensureRemoteFolder(server, user, pass, webPath, progress, res, "Слева")
+                        when (task.syncType) {
+                            "to_right" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Справа", res, live)
+                            "to_left" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Слева", res, live)
+                            else -> {
+                                val d = doc(context, localUri, progress, res)
+                                uploadLocal(context, d, server, webPath, user, pass, progress, "Слева", res, live)
+                                downloadTo(context, webPath, d, server, user, pass, progress, "Справа", res, live)
+                            }
                         }
                     }
-                } else {
-                    val localUri = task.rightLocalUri; val webPath = task.leftWebdavPath
-                    ensureRemoteFolder(server, user, pass, webPath, progress, res, "Слева")
-                    when (task.syncType) {
-                        "to_right" -> downloadTo(context, webPath, doc(context, localUri, progress, res), server, user, pass, progress, "Справа", res, live)
-                        "to_left" -> uploadLocal(context, doc(context, localUri, progress, res), server, webPath, user, pass, progress, "Слева", res, live)
-                        else -> {
-                            val d = doc(context, localUri, progress, res)
-                            uploadLocal(context, d, server, webPath, user, pass, progress, "Слева", res, live)
-                            downloadTo(context, webPath, d, server, user, pass, progress, "Справа", res, live)
-                        }
-                    }
+                } catch (t: Throwable) {
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail("Движок синхронизации", "${t.javaClass.simpleName}: ${t.message}"))
+                    progress("✗ ${t.javaClass.simpleName}: ${t.message}")
+                    Log.e(TAG, "Sync error", t)
                 }
-            } catch (t: Throwable) {
-                res.errors++
-                progress("✗ ${t.javaClass.simpleName}: ${t.message}")
-                Log.e(TAG, "Sync error", t)
             }
-        }
 
-        val durationMs = System.currentTimeMillis() - startTime
-        progress("■ Завершено: загружено ${res.uploaded}, скачано ${res.downloaded}, ошибок ${res.errors}")
-        
-        // НОВОЕ: заменяем addRecord на finalizeRecord — обновляет live-запись по time
-        HistoryManager.finalizeRecord(context, HistoryRecord(
-            time = startTime, durationMs = durationMs, checked = res.checked,
-            uploaded = res.uploaded, downloaded = res.downloaded, deleted = 0,
-            errors = res.errors, status = if (res.errors == 0) "ok" else "error",
-            trigger = trigger, bytesTransferred = res.bytes, transferMs = res.transferMs,
-            filesJson = filesToJson(res.files), foldersJson = foldersToJson(res.folders),
-            taskName = task.name,
-            taskId = task.id,
-            totalFiles = res.checked
-        ))
-        
-        return SyncResult(res.checked, res.uploaded, res.downloaded, res.errors, durationMs)
+            res.durationMs = System.currentTimeMillis() - startTime
+            progress("■ Завершено: загружено ${res.uploaded}, скачано ${res.downloaded}, ошибок ${res.errors}")
+            
+            HistoryManager.finalizeRecord(context, HistoryRecord(
+                time = startTime, durationMs = res.durationMs, checked = res.checked,
+                uploaded = res.uploaded, downloaded = res.downloaded, deleted = 0,
+                errors = res.errors, status = if (res.errors == 0) "ok" else "error",
+                trigger = trigger, bytesTransferred = res.bytes, transferMs = res.transferMs,
+                filesJson = filesToJson(res.files),
+                foldersJson = foldersToJson(res.folders),
+                errorsJson = errorsToJson(res.errorList),
+                taskName = task.name,
+                taskId = task.id,
+                totalFiles = res.checked
+            ))
+            
+        } finally {
+            if (wl.isHeld) wl.release()
+        }
+        return SyncResult(res.checked, res.uploaded, res.downloaded, res.errors, res.durationMs)
     }
 
     private fun doc(context: Context, uri: String, progress: (String) -> Unit, res: SideResult): DocumentFile? {
         val d = try { DocumentFile.fromTreeUri(context, Uri.parse(uri)) } catch (e: Exception) { null }
-        if (d == null) { progress("✗ Ошибка: папка недоступна (URI невалиден)"); res.errors++ }
+        if (d == null) { progress("✗ Ошибка: папка недоступна (URI невалиден)"); res.errors++; res.errorList.add(SyncErrorDetail("Локальная папка", "недоступна (URI невалиден)")) }
         return d
     }
 
@@ -105,7 +116,7 @@ object SyncEngine {
         // НОВОЕ: показываем в live-карточке, что идёт листинг папки
         live("📋 Список (загрузка): ${webPath.substringAfterLast('/')}/", 0, 0)
         val remote = listRemote(server, user, pass, webPath, progress, res) ?: return
-        val remoteFiles = remote.filter { !it.isDir }.associate { it.name to it.size }
+        val remoteFiles = remote.filter { !it.isDir }.associate { it.name to it }
         
         // НОВОЕ: считаем общее количество файлов ДО цикла (для прогресса)
         val allFiles = dir.listFiles().filter {
@@ -139,19 +150,26 @@ object SyncEngine {
             // НОВОЕ: уведомляем UI о текущем файле
             live(name, fileIndex, totalToUpload)
             
-            val rSize = remoteFiles[name]
-            if (rSize != null && rSize == f.length()) continue
+            val rFile = remoteFiles[name]
+            if (rFile != null && rFile.size == f.length()) {
+                val localM = f.lastModified()
+                val remoteM = rFile.lastModified
+                if (remoteM <= 0L || localM <= 0L) continue
+                if (remoteM >= localM - 1500L) continue
+            }
             progress("   ⬆ $name")
             val t0 = System.currentTimeMillis()
             try {
                 val input = context.contentResolver.openInputStream(f.uri)
-                if (input == null) { progress("   ✗ $name: не удалось открыть"); res.errors++ }
+                if (input == null) { progress("   ✗ $name: не удалось открыть"); res.errors++; res.errorList.add(SyncErrorDetail(name, "не удалось открыть")) }
                 else input.use {
                     val code = WebDavClient.put(server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name), user, pass, it)
                     if (code in 200..299) {
-                        res.uploaded++; res.bytes += f.length()
+                        res.uploaded++
+                        res.bytes += f.length()
                         res.files.add(SyncFileDetail(name, f.length(), System.currentTimeMillis() - t0, side))
                         progress("   ✓ $name")
+                        updateCacheAfterUpload(res, webPath, name, f.length())
                     } else {
                         val reason = when (code) {
                             403 -> "нет прав"; 413 -> "слишком большой"; 507 -> "сервер переполнен"
@@ -160,10 +178,21 @@ object SyncEngine {
                         }
                         progress("   ✗ $name: $reason")
                         res.errors++
+                        res.errorList.add(SyncErrorDetail(name, reason))
                     }
                 }
-            } catch (e: Exception) { progress("   ✗ $name: ${e.message}"); res.errors++; Log.e(TAG, "Upload error: $name", e) }
+            } catch (e: Exception) { progress("   ✗ $name: ${e.message}"); res.errors++; res.errorList.add(SyncErrorDetail(name, e.message ?: "исключение")); Log.e(TAG, "Upload error: $name", e) }
             res.transferMs += System.currentTimeMillis() - t0
+        }
+    }
+
+    private fun updateCacheAfterUpload(res: SideResult, webPath: String, name: String, size: Long) {
+        val cache = res.listingCache[webPath] ?: return
+        val i = cache.indexOfFirst { !it.isDir && it.name == name }
+        if (i >= 0) {
+            cache[i] = cache[i].copy(size = size)
+        } else {
+            cache.add(Entry(name, false, size))
         }
     }
 
@@ -200,40 +229,43 @@ object SyncEngine {
     private fun downloadTo(
         context: Context, webPath: String, dir: DocumentFile?, server: String,
         user: String, pass: String, progress: (String) -> Unit, side: String, res: SideResult,
-        live: (String, Int, Int) -> Unit   // НОВОЕ
+        live: (String, Int, Int) -> Unit
     ) {
         if (dir == null) return
         live("📋 Список (скачивание): ${webPath.substringAfterLast('/')}/", 0, 0)
         val entries = listRemote(server, user, pass, webPath, progress, res) ?: return
-        
-        // НОВОЕ: считаем общее количество файлов ДО цикла
+
         val fileEntries = entries.filter { !it.isDir }
         val totalToDownload = fileEntries.size
         var fileIndex = 0
         val localChildren = dir.listFiles()
-        
+        val localMap = HashMap<String, DocumentFile>(localChildren.size)
+        for (c in localChildren) {
+            val n = c.name
+            if (!c.isDirectory && n != null) localMap[n] = c
+        }
+
         for (e in entries) {
             val remote = webPath.trimEnd('/') + "/" + e.name
-            
-            // ИСПРАВЛЕНО: мусор с сервера не скачиваем и не заходим в мусорные папки
+
+            // мусор с сервера не скачиваем и не заходим в мусорные папки
             if (isJunkFile(e.name) || isJunkFolder(e.name)) continue
-            
+
             if (e.isDir) {
                 val sub = localChildren.firstOrNull { it.isDirectory && it.name == e.name }
                     ?: dir.createDirectory(e.name) ?: continue
-                // НОВОЕ: передаём live в рекурсивный вызов
                 downloadTo(context, remote, sub, server, user, pass, progress, side, res, live)
                 continue
             }
             res.checked++
-            val existing = dir.findFile(e.name)?.takeIf { it.isFile }
-                ?: localChildren.firstOrNull { !it.isDirectory && it.name == e.name }
-            if (existing != null && existing.length() == e.size) continue   // не изменился
-            
+            var existing = localMap[e.name]
+            if (existing != null && existing.length() == e.size) continue
+            if (existing == null) existing = dir.findFile(e.name)?.takeIf { it.isFile }
+            if (existing != null && existing.length() == e.size) continue
+
             fileIndex++
-            // НОВОЕ: уведомляем UI о текущем файле
             live(e.name, fileIndex, totalToDownload)
-            
+
             progress("   ⬇ ${e.name}")
             val t0 = System.currentTimeMillis()
             var resp: okhttp3.Response? = null
@@ -241,7 +273,11 @@ object SyncEngine {
                 resp = WebDavClient.get(server + WebDavRepository.encodePath(remote), user, pass)
                 if (resp.code in 200..299) {
                     val target = existing ?: dir.createFile(getMimeType(e.name), e.name)
-                    if (target == null) { progress("   ✗ ${e.name}: не удалось создать файл"); res.errors++ }
+                    if (target == null) {
+                        progress("   ✗ ${e.name}: не удалось создать файл")
+                        res.errors++
+                        res.errorList.add(SyncErrorDetail(e.name, "не удалось создать файл"))   // НОВОЕ
+                    }
                     else {
                         var size = 0L
                         context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
@@ -254,10 +290,15 @@ object SyncEngine {
                         res.files.add(SyncFileDetail(e.name, size, System.currentTimeMillis() - t0, side))
                         progress("   ✓ ${e.name}")
                     }
-                } else { progress("   ✗ ${e.name} (HTTP ${resp.code})"); res.errors++ }
+                } else {
+                    progress("   ✗ ${e.name} (HTTP ${resp.code})")
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail(e.name, "HTTP ${resp.code}"))   // НОВОЕ
+                }
             } catch (e2: Exception) {
                 progress("   ✗ ${e.name}: ${e2.message}")
                 res.errors++
+                res.errorList.add(SyncErrorDetail(e.name, e2.message ?: "исключение"))   // НОВОЕ
                 Log.e(TAG, "Download error: ${e.name}", e2)
             } finally {
                 try { resp?.close() } catch (_: Exception) {}
@@ -269,11 +310,15 @@ object SyncEngine {
     // ==================== Утилиты ====================
     private fun listRemote(server: String, user: String, pass: String, webPath: String,
                            progress: (String) -> Unit, res: SideResult): List<Entry>? {
+        res.listingCache[webPath]?.let { return it }
         return try {
             val xml = WebDavClient.propfind(server + WebDavRepository.encodePath(webPath), user, pass)
-            parseEntries(xml, webPath)
+            val list = parseEntries(xml, webPath)
+            res.listingCache[webPath] = list.toMutableList()
+            list
         } catch (e: Exception) {
             progress("✗ Ошибка PROPFIND: ${e.message}"); res.errors++
+            res.errorList.add(SyncErrorDetail("PROPFIND $webPath", e.message ?: "исключение"))
             Log.e(TAG, "Propfind error", e); null
         }
     }
@@ -285,9 +330,17 @@ object SyncEngine {
             when {
                 code in 200..299 -> { res.folders.add(SyncFolderDetail(folderPath, side)); progress("   📁 Создана папка: $folderPath") }
                 code == 405 -> {} // уже существует
-                else -> { progress("   ✗ Ошибка создания папки $folderPath (HTTP $code)"); res.errors++ }
+                else -> {
+                    progress("   ✗ Ошибка создания папки $folderPath (HTTP $code)")
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail(folderPath, "HTTP $code"))   // НОВОЕ
+                }
             }
-        } catch (e: Exception) { progress("   ✗ Ошибка создания папки: ${e.message}"); res.errors++ }
+        } catch (e: Exception) {
+            progress("   ✗ Ошибка создания папки: ${e.message}")
+            res.errors++
+            res.errorList.add(SyncErrorDetail(folderPath, e.message ?: "исключение"))   // НОВОЕ
+        }
     }
 
     private fun parseEntries(xml: String, requestPath: String): List<Entry> {
@@ -300,7 +353,7 @@ object SyncEngine {
             val reqNorm = requestPath.trimEnd('/')
             for (i in 0 until responses.length) {
                 val node = responses.item(i) ?: continue
-                var isDir = false; var name = ""; var size = 0L; var href = ""
+                var isDir = false; var name = ""; var size = 0L; var href = ""; var lastModified = 0L
                 fun walkProp(n: org.w3c.dom.Node) {
                     for (j in 0 until n.childNodes.length) {
                         val c = n.childNodes.item(j) ?: continue
@@ -309,21 +362,33 @@ object SyncEngine {
                             "collection" -> isDir = true
                             "displayname" -> name = c.textContent.orEmpty()
                             "getcontentlength" -> size = c.textContent.orEmpty().toLongOrNull() ?: 0L
+                            "getlastmodified" -> lastModified = parseRfc1123(c.textContent.orEmpty())
                             "propstat", "prop", "response" -> walkProp(c)
                         }
                     }
                 }
                 walkProp(node)
                 val decodedHref = try { java.net.URLDecoder.decode(href, "UTF-8") } catch (e: Exception) { href }
-                if (decodedHref.trimEnd('/') == reqNorm) continue          // сама папка
+                if (decodedHref.trimEnd('/') == reqNorm) continue
                 if (name.isEmpty()) {
                     val t = decodedHref.trimEnd('/')
                     name = t.substringAfterLast('/')
                 }
-                if (name.isNotEmpty()) list.add(Entry(name, isDir, size))
+                if (name.isNotEmpty()) list.add(Entry(name, isDir, size, lastModified))
             }
         } catch (e: Exception) { Log.e(TAG, "parseEntries error", e) }
         return list
+    }
+
+    // НОВОЕ: парсинг RFC 1123 даты (формат WebDAV getlastmodified)
+    private fun parseRfc1123(dateStr: String): Long {
+        return try {
+            val formatter = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US)
+            formatter.timeZone = java.util.TimeZone.getTimeZone("GMT")
+            formatter.parse(dateStr)?.time ?: 0L
+        } catch (e: Exception) {
+            0L
+        }
     }
 
     private fun filesToJson(list: List<SyncFileDetail>): String {
@@ -331,6 +396,13 @@ object SyncEngine {
         for (f in list) arr.put(org.json.JSONObject().apply { put("n", f.name); put("s", f.size); put("m", f.ms); put("d", f.side) })
         return arr.toString()
     }
+
+    private fun errorsToJson(list: List<SyncErrorDetail>): String {
+        val arr = org.json.JSONArray()
+        for (e in list) arr.put(org.json.JSONObject().apply { put("n", e.name); put("r", e.reason) })
+        return arr.toString()
+    }
+
     private fun foldersToJson(list: List<SyncFolderDetail>): String {
         val arr = org.json.JSONArray()
         for (f in list) arr.put(org.json.JSONObject().apply { put("p", f.path); put("d", f.side) })

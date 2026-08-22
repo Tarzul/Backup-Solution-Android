@@ -47,21 +47,21 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     continue
                 }
                 try {
-                    // НОВОЕ: фиксируем время старта задания для live-записи
+
                     val taskStartTime = System.currentTimeMillis()
-                    
-                    // НОВОЕ: создаём live-запись СРАЗУ при запуске задания (status="running")
-                    HistoryManager.createLiveRecord(applicationContext, taskStartTime, task.name, "schedule", task.id)
+                    if (!HistoryManager.createLiveRecord(applicationContext, taskStartTime, task.name, "schedule", task.id)) {
+                        Log.w(TAG, "'${task.name}' уже выполняется — дубль пропущен")
+                        continue
+                    }
                     
                     val result = SyncEngine.runTask(
                         applicationContext, 
                         task, 
                         trigger = "schedule",
-                        startTime = taskStartTime,   // НОВОЕ
+                        startTime = taskStartTime,
                         onProgress = { Log.d(TAG, "  $it") },
                         onLiveUpdate = { fileName, fileIndex, totalFiles ->
-                            HistoryManager.updateLiveRecord(
-                                applicationContext, taskStartTime, fileName, fileIndex, totalFiles)
+                            HistoryManager.updateLiveRecord(applicationContext, taskStartTime, fileName, fileIndex, totalFiles)
                         }
                     )
                     val status = if (result.errors == 0) "ok" else "error"

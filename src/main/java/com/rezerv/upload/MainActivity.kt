@@ -90,8 +90,9 @@ class MainActivity : AppCompatActivity() {
         loadSettings()
         observeViewModel()
         viewModel.ensureScheduler()
-        requestNotifications()   // ИСПРАВЛЕНО: runtime-запрос POST_NOTIFICATIONS (33+)
-        promptExactAlarms()      // ИСПРАВЛЕНО: запрос точных будильников (S+)
+        requestNotifications()
+        promptExactAlarms()
+        promptBatteryOptimization()
     }
 
     override fun onResume() {
@@ -123,6 +124,30 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {
                     try {
                         startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    private fun promptBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    // Системный диалог "Разрешить работу без оптимизации?"
+                    startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            android.net.Uri.parse("package:$packageName")
+                        )
+                    )
+                } catch (e: Exception) {
+                    // Некоторые прошивки блокируют этот intent —
+                    // открываем общий список оптимизаций
+                    try {
+                        startActivity(android.content.Intent(
+                            android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                     } catch (_: Exception) {}
                 }
             }

@@ -114,15 +114,8 @@ class HistoryDetailsActivity : AppCompatActivity() {
         val errors = HistoryManager.parseErrors(r.errorsJson)
         findViewById<TextView>(R.id.tvHistErrorsTitle).text = "Ошибок (${errors.size})"
         llErrors.removeAllViews()
-        if (errors.isEmpty()) {
-            llErrors.addView(TextView(this).apply {
-                text = "Ошибок нет ✓"
-                setTextColor(Color.parseColor("#FF81C784"))
-                textSize = 13f
-                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
-            })
-        } else {
-            errors.forEach { e ->
+        when {
+            errors.isNotEmpty() -> errors.forEach { e ->
                 llErrors.addView(TextView(this).apply {
                     text = "✗ ${e.name}\n   ${e.reason}"
                     setTextColor(Color.parseColor("#FFE57373"))
@@ -130,6 +123,18 @@ class HistoryDetailsActivity : AppCompatActivity() {
                     setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
                 })
             }
+            r.errors > 0 -> llErrors.addView(TextView(this).apply {
+                text = "Зафиксировано ошибок: ${r.errors}, но детали не были сохранены (запуск до обновления)"
+                setTextColor(Color.parseColor("#FFFFB74D"))
+                textSize = 13f
+                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+            })
+            else -> llErrors.addView(TextView(this).apply {
+                text = "Ошибок нет ✓"
+                setTextColor(Color.parseColor("#FF81C784"))
+                textSize = 13f
+                setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+            })
         }
     }
 

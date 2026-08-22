@@ -5,6 +5,7 @@ import android.util.Log
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -85,7 +86,6 @@ object WebDavClient {
         val body = """<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:">
   <D:prop>
-    <D:displayname/>
     <D:resourcetype/>
     <D:getcontentlength/>
     <D:getlastmodified/>
@@ -104,12 +104,28 @@ object WebDavClient {
         client(user, pass).newCall(Request.Builder().url(url).get().build()).execute()
 
     fun put(url: String, user: String, pass: String, inputStream: java.io.InputStream): Int {
-
-        val bytes = inputStream.use { it.readBytes() }
-        val body = bytes.toRequestBody("application/octet-stream".toMediaType())
-        client(user, pass).newCall(Request.Builder().url(url).put(body).build()).execute().use { r ->
+        val body = object : RequestBody() {
+            override fun contentType() = "application/octet-stream".toMediaType()
+            
+            override fun writeTo(sink: BufferedSink) {
+                inputStream.use { input ->
+                    val buffer = ByteArray(8192) // 8KB буфер
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        sink.write(buffer, 0, bytesRead)
+                    }
+                }
+            }
+        }
+        
+        val request = Request.Builder()
+            .url(url)
+            .put(body)
+            .build()
+            
+        return client(user, pass).newCall(request).execute().use { r ->
             Log.d(TAG, "PUT -> HTTP ${r.code}: $url")
-            return r.code
+            r.code
         }
     }
 

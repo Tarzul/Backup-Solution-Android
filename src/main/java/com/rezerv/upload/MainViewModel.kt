@@ -421,13 +421,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val startTime = System.currentTimeMillis()
             
-            // НОВОЕ: создаём live-запись СРАЗУ при нажатии ▶ ЗАПУСК
-            HistoryManager.createLiveRecord(getApplication(), startTime, t.name, "user", t.id)
+            // НОВОЕ: защита от двойного запуска
+            if (!HistoryManager.createLiveRecord(getApplication(), startTime, t.name, "user", t.id)) {
+                _events.value = Event.ShowToast("Задание уже выполняется")
+                return@launch
+            }
+            
             refreshHistory()
-            _events.value = Event.SwitchTab(3)   // переключаемся на вкладку ИСТОРИЯ
+            _events.value = Event.SwitchTab(3)
             _events.value = Event.ShowToast("Запуск синхронизации...")
             
-            // Периодически обновляем UI, пока идёт задание
             val ticker = viewModelScope.launch {
                 while (isActive) {
                     delay(1000)

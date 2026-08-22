@@ -56,18 +56,23 @@ object HistoryManager {
         }
     }
 
-    fun createLiveRecord(context: Context, time: Long, taskName: String, trigger: String, taskId: String = "") {
-        try {
+    fun createLiveRecord(context: Context, time: Long, taskName: String, trigger: String, taskId: String = ""): Boolean {
+        return try {
             synchronized(this) {
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 val records = getRecordsLocked(prefs).toMutableList()
                 val now = System.currentTimeMillis()
-                val LIVE_TIMEOUT = 30 * 60 * 1000L  // 10 минут
+                val LIVE_TIMEOUT = 30 * 60 * 1000L
                 for (i in records.indices) {
-                    if (records[i].status == "running" &&
-                        now - records[i].liveStartedAt > LIVE_TIMEOUT) {
+                    if (records[i].status == "running" && now - records[i].liveStartedAt > LIVE_TIMEOUT) {
                         records[i] = records[i].copy(status = "error")
                     }
+                }
+                // Защита от параллельных запусков одного задания
+                if (taskId.isNotEmpty() &&
+                    records.any { it.status == "running" && it.taskId == taskId }) {
+                    saveRecords(prefs, records)
+                    return@synchronized false
                 }
                 records.add(0, HistoryRecord(
                     time = time, durationMs = 0, checked = 0, uploaded = 0,
@@ -77,9 +82,11 @@ object HistoryManager {
                 ))
                 if (records.size > MAX) records.removeAt(records.lastIndex)
                 saveRecords(prefs, records)
+                true
             }
         } catch (e: Throwable) {
             Log.e(TAG, "createLiveRecord ERROR", e)
+            false
         }
     }
 

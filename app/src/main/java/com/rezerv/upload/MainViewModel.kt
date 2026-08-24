@@ -302,50 +302,103 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ==================== Операции с файлами ====================
-    fun deleteSelected(server: String, user: String, pass: String) {
-        viewModelScope.launch {
-            val state = _uiState.value ?: return@launch
-            val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
-            val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
-            if (selected.isEmpty()) return@launch
-            exitSelectionMode()
-            selected.forEach { file ->
-                val deleted = WebDavRepository.deleteFile(base, file.path, user, pass)
-                if (deleted) appendLog("✓ Удалено: ${file.name}")
-                else appendLog("✗ Не удалось удалить: ${file.name}")
+fun deleteSelected(server: String, user: String, pass: String) {
+    viewModelScope.launch {
+        val state = _uiState.value ?: return@launch
+        val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
+        val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
+        if (selected.isEmpty()) return@launch
+        exitSelectionMode()
+        
+        var successCount = 0
+        var errorCount = 0
+        
+        selected.forEach { file ->
+            val result = WebDavRepository.deleteFile(base, file.path, user, pass)
+            when (result) {
+                is WebDavResult.Success -> {
+                    appendLog("✓ Удалено: ${file.name}")
+                    successCount++
+                }
+                else -> {
+                    appendLog("✗ Не удалось удалить: ${file.name} (${result.errorMessage()})")
+                    errorCount++
+                }
             }
-            browseServer(server, state.currentPath, user, pass)
         }
+        
+        _events.value = Event.ShowToast("Удалено: $successCount, ошибок: $errorCount")
+        browseServer(server, state.currentPath, user, pass)
     }
+}
 
-    fun downloadSelected(server: String, user: String, pass: String) {
-        viewModelScope.launch {
-            val state = _uiState.value ?: return@launch
-            val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
-            val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
-            if (selected.isEmpty()) return@launch
-            exitSelectionMode()
-            var count = 0
-            selected.filter { !it.isDirectory }.forEach { file ->
-                val downloaded = WebDavRepository.downloadFile(
-                    getApplication(), base, file.path, file.name, user, pass
-                )
-                if (downloaded) { appendLog("✓ Скачано: ${file.name}"); count++ }
-                else appendLog("✗ Не удалось скачать: ${file.name}")
+fun downloadSelected(server: String, user: String, pass: String) {
+    viewModelScope.launch {
+        val state = _uiState.value ?: return@launch
+        val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
+        val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
+        if (selected.isEmpty()) return@launch
+        exitSelectionMode()
+        
+        var successCount = 0
+        var errorCount = 0
+        
+        selected.filter { !it.isDirectory }.forEach { file ->
+            val result = WebDavRepository.downloadFile(
+                getApplication(), base, file.path, file.name, user, pass
+            )
+            when (result) {
+                is WebDavRepository.DownloadResult.Success -> {
+                    appendLog("✓ Скачано: ${file.name} (${formatSize(result.bytesDownloaded)})")
+                    successCount++
+                }
+                is WebDavRepository.DownloadResult.HttpError -> {
+                    appendLog("✗ ${file.name}: HTTP ${result.code}")
+                    errorCount++
+                }
+                is WebDavRepository.DownloadResult.IoError -> {
+                    appendLog("✗ ${file.name}: ${result.message}")
+                    errorCount++
+                }
             }
-            _events.value = Event.ShowToast("Скачано: $count")
         }
+        
+        _events.value = Event.ShowToast("Скачано: $successCount, ошибок: $errorCount")
     }
+}
+
+// ✅ Вспомогательная функция для форматирования размера
+private fun formatSize(b: Long): String = when {
+    b < 0 -> "—"
+    b < 1024 -> "$b Б"
+    b < 1024 * 1024 -> String.format("%.1f КБ", b / 1024.0)
+    b < 1024L * 1024 * 1024 -> String.format("%.1f МБ", b / (1024.0 * 1024))
+    else -> String.format("%.2f ГБ", b / (1024.0 * 1024 * 1024))
+}
 
     fun downloadFile(server: String, path: String, fileName: String, user: String, pass: String) {
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             appendLog("⬇ Скачивание: $fileName")
-            val downloaded = WebDavRepository.downloadFile(
+        
+            val result = WebDavRepository.downloadFile(
                 getApplication(), base, path, fileName, user, pass
             )
-            if (downloaded) appendLog("✓ Скачано: $fileName")
-            else appendLog("✗ Не удалось скачать: $fileName")
+        
+            when (result) {
+                is WebDavRepository.DownloadResult.Success -> {
+                    appendLog("✓ Скачано: $fileName (${formatSize(result.bytesDownloaded)})")
+                    _events.value = Event.ShowToast("Скачано: $fileName")
+                }
+                is WebDavRepository.DownloadResult.HttpError -> {
+                    appendLog("✗ $fileName: HTTP ${result.code}")
+                    _events.value = Event.ShowToast("Ошибка HTTP ${result.code}")
+                }
+                is WebDavRepository.DownloadResult.IoError -> {
+                    appendLog("✗ $fileName: ${result.message}")
+                    _events.value = Event.ShowToast("Ошибка: ${result.message}")
+                }
+            }
         }
     }
 
@@ -385,14 +438,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             val newPath = (if (state.currentPath.endsWith("/")) state.currentPath
             else "${state.currentPath}/") + folderName + "/"
-            val created = WebDavRepository.createFolder(base, newPath, user, pass)
-            if (created) {
-                appendLog("✓ Папка создана: $folderName")
-                _events.value = Event.ShowToast("Папка создана")
-                browseServer(server, state.currentPath, user, pass)
-            } else {
-                appendLog("✗ Ошибка создания папки")
-                _events.value = Event.ShowToast("Ошибка создания папки")
+        
+            val result = WebDavRepository.createFolder(base, newPath, user, pass)
+        
+            when (result) {
+                is WebDavResult.Success -> {
+                    appendLog("✓ Папка создана: $folderName")
+                    _events.value = Event.ShowToast("Папка создана")
+                    browseServer(server, state.currentPath, user, pass)
+                }
+                else -> {
+                    appendLog("✗ Ошибка создания папки: ${result.errorMessage()}")
+                    _events.value = Event.ShowToast("Ошибка: ${result.errorMessage()}")
+                }   
             }
         }
     }

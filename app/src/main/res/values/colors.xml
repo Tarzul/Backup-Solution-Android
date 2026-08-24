@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="primary_blue">#64B5F6</color>
+    <color name="primary_blue_dark">#21618C</color>
+    <color name="on_primary">#000000</color>
+    <color name="surface_dark">#2A2A2A</color>
+    <color name="surface_darker">#1A1A1A</color>
+    <color name="background_dark">#1E1E1E</color>
+    <color name="background_darker">#161616</color>
+    <color name="border_gray">#3A3A3A</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#E0E0E0</color>
+    <color name="hint_gray">#888888</color>
+    <color name="success_green">#81C784</color>
+    <!-- ИСПРАВЛЕНО: добавлен тёмно-зелёный для баннеров успеха (вместо Color.parseColor) -->
+    <color name="success_green_dark">#3E6B2F</color>
+    <color name="error_red">#E57373</color>
+    <color name="error_red_dark">#8B3A3A</color>
+    <color name="warning_orange">#FFB74D</color>
+    <color name="info_purple">#CE93D8</color>
+    <color name="log_green">#B0E0B0</color>
+    <color name="circle_light">#A5C8DC</color>
+    <color name="circle_red">#8B2F2F</color>
+    <color name="selection_highlight">#334C66</color>
+    <color name="file_folder">#64B5F6</color>
+    <color name="file_image">#CE93D8</color>
+    <color name="file_video">#FFB74D</color>
+</resources>

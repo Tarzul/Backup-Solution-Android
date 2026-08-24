@@ -1,0 +1,616 @@
+package com.rezerv.upload
+
+import android.Manifest
+import android.app.AlarmManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
+import android.view.View
+import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Observer
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity : AppCompatActivity() {
+    private val viewModel: MainViewModel by viewModels()
+    private val TAG = "MainActivity"
+
+    // Вкладки
+    private lateinit var btnTabConnection: Button
+    private lateinit var btnTabBrowser: Button
+    private lateinit var btnTabTasks: Button
+    private lateinit var btnTabHistory: Button
+    private lateinit var tabConnection: ScrollView
+    private lateinit var tabBrowser: View
+    private lateinit var tabTasks: ScrollView
+    private lateinit var tabHistory: ScrollView
+
+    // Подключение
+    private lateinit var etServer: EditText
+    private lateinit var etUser: EditText
+    private lateinit var etPass: EditText
+    private lateinit var spAuth: Spinner
+    private lateinit var tvLog: TextView
+    private lateinit var btnConnect: Button
+
+    // Файлы (RecyclerView)
+    private lateinit var tvCurrentPath: TextView
+    private lateinit var rvFiles: RecyclerView
+    private lateinit var btnBack: Button
+    private lateinit var btnNewFolder: Button
+    private lateinit var llSelection: LinearLayout
+    private lateinit var tvSelectionCount: TextView
+
+    // Задания
+    private lateinit var tasksContainer: LinearLayout
+
+    // История
+    private lateinit var historyChart: HistoryChartView
+    private lateinit var historyContainer: LinearLayout
+    private lateinit var tvHistoryEmpty: TextView
+    private lateinit var btnClearHistory: Button
+
+    private var picked: List<Uri> = emptyList()
+    private lateinit var fileAdapter: FileRecyclerViewAdapter
+
+    // ✅ НОВОЕ: ActivityResultLauncher вместо requestPermissions (устарел)
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.log("✓ Уведомления разрешены")
+        } else {
+            viewModel.log("⚠ Уведомления отклонены")
+        }
+    }
+
+    private val mediaPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.all { it }
+        if (granted) {
+            viewModel.log("✓ Доступ к медиа разрешён")
+        } else {
+            viewModel.log("⚠ Доступ к медиа частично ограничен")
+        }
+    }
+
+    // ✅ НОВОЕ: Launcher для возврата из настроек exact alarms
+    private val exactAlarmSettingsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // Перепланируем после возврата из настроек
+        viewModel.ensureScheduler()
+        viewModel.log("✓ Проверка будильников обновлена")
+    }
+
+    private val picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        picked = uris ?: emptyList()
+        picked.forEach { uri ->
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+                Log.w(TAG, "Не удалось взять разрешение для $uri: ${e.message}")
+            }
+        }
+        viewModel.log("Выбрано файлов: ${picked.size}")
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        coil.Coil.setImageLoader(
+            coil.ImageLoader.Builder(this)
+                .okHttpClient(WebDavClient.httpClient)
+                .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(0.25).build() }
+                .build()
+        )
+        initViews()
+        setupListeners()
+        loadSettings()
+        observeViewModel()
+        viewModel.ensureScheduler()
+        
+        // ✅ НОВОЕ: Запрос разрешений по приоритету
+        requestMediaPermissions()
+        requestNotifications()
+        promptExactAlarms()
+        promptBatteryOptimization()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (tabTasks.visibility == View.VISIBLE) viewModel.refreshTasks()
+        if (tabHistory.visibility == View.VISIBLE) viewModel.refreshHistory()
+        
+        // ✅ НОВОЕ: Проверяем exact alarms при каждом возврате (они могут быть отозваны)
+        checkExactAlarmStatus()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+    }
+
+    // ==================== Разрешения ====================
+    
+    // ✅ ИСПРАВЛЕНО: Современный подход к запросам медиа-разрешений
+    private fun requestMediaPermissions() {
+        val permissionsNeeded = mutableListOf<String>()
+        
+        when {
+            Build.VERSION.SDK_INT >= 34 -> {
+                // Android 14+: гранулярные разрешения + visual user selected
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VIDEO)
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            }
+            Build.VERSION.SDK_INT >= 33 -> {
+                // Android 13
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_IMAGES)
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VIDEO)
+            }
+            Build.VERSION.SDK_INT >= 23 -> {
+                // Android 6-12
+                if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
+                    permissionsNeeded.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
+        
+        if (permissionsNeeded.isNotEmpty()) {
+            mediaPermissionLauncher.launch(permissionsNeeded.toTypedArray())
+        }
+    }
+
+    // ✅ ИСПРАВЛЕНО: Использует ActivityResultLauncher вместо устаревшего requestPermissions
+    private fun requestNotifications() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            when {
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED -> {
+                    Log.d(TAG, "Уведомления уже разрешены")
+                }
+                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
+                    // Пользователь уже отклонял — показываем объяснение
+                    AlertDialog.Builder(this)
+                        .setTitle("Уведомления")
+                        .setMessage("Приложение отправляет уведомления о результатах синхронизации. Разрешить?")
+                        .setPositiveButton("Разрешить") { _, _ ->
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        .setNegativeButton("Не сейчас", null)
+                        .show()
+                }
+                else -> {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        }
+    }
+
+    // ✅ ИСПРАВЛЕНО: Поддержка Android 14+ (USE_EXACT_ALARM + fallback)
+    private fun promptExactAlarms() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val am = getSystemService(AlarmManager::class.java) ?: return
+            
+            // ✅ Android 14+: проверяем USE_EXACT_ALARM
+            if (Build.VERSION.SDK_INT >= 34) {
+                // USE_EXACT_ALARM не требует запроса (автоматически granted)
+                // Но всё равно проверяем canScheduleExactAlarms для SCHEDULE_EXACT_ALARM
+                if (am.canScheduleExactAlarms()) {
+                    Log.d(TAG, "Exact alarms разрешены (USE_EXACT_ALARM активен)")
+                    return
+                }
+            }
+            
+            if (!am.canScheduleExactAlarms()) {
+                // ✅ Android 13+: запрашиваем через Settings
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    try {
+                        val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                            Uri.parse("package:$packageName"))
+                        exactAlarmSettingsLauncher.launch(intent)
+                        viewModel.log("⏰ Требуется разрешение на точные будильники")
+                    } catch (_: Exception) {
+                        try {
+                            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                            exactAlarmSettingsLauncher.launch(intent)
+                        } catch (_: Exception) {
+                            Log.e(TAG, "Не удалось открыть настройки exact alarms")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ✅ НОВОЕ: Проверка статуса exact alarms при каждом onResume
+    private fun checkExactAlarmStatus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val am = getSystemService(AlarmManager::class.java) ?: return
+            if (!am.canScheduleExactAlarms()) {
+                viewModel.log("⚠ Точные будильники отозваны — синхронизация может быть неточной")
+            }
+        }
+    }
+
+    private fun promptBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            android.net.Uri.parse("package:$packageName")
+                        )
+                    )
+                } catch (e: Exception) {
+                    try {
+                        startActivity(android.content.Intent(
+                            android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    private fun initViews() {
+        btnTabConnection = findViewById(R.id.btnTabConnection)
+        btnTabBrowser = findViewById(R.id.btnTabBrowser)
+        btnTabTasks = findViewById(R.id.btnTabTasks)
+        btnTabHistory = findViewById(R.id.btnTabHistory)
+        tabConnection = findViewById(R.id.tabConnection)
+        tabBrowser = findViewById(R.id.tabBrowser)
+        tabTasks = findViewById(R.id.tabTasks)
+        tabHistory = findViewById(R.id.tabHistory)
+        etServer = findViewById(R.id.etServer)
+        etUser = findViewById(R.id.etUser)
+        etPass = findViewById(R.id.etPass)
+        spAuth = findViewById(R.id.spAuth)
+        tvLog = findViewById(R.id.tvLog)
+        btnConnect = findViewById(R.id.btnConnect)
+        tvCurrentPath = findViewById(R.id.tvCurrentPath)
+        rvFiles = findViewById(R.id.rvFiles)
+        btnBack = findViewById(R.id.btnBack)
+        btnNewFolder = findViewById(R.id.btnNewFolder)
+        llSelection = findViewById(R.id.llSelection)
+        tvSelectionCount = findViewById(R.id.tvSelectionCount)
+        tasksContainer = findViewById(R.id.tasksContainer)
+        historyChart = findViewById(R.id.historyChart)
+        historyContainer = findViewById(R.id.historyContainer)
+        tvHistoryEmpty = findViewById(R.id.tvHistoryEmpty)
+        btnClearHistory = findViewById(R.id.btnClearHistory)
+
+        rvFiles.layoutManager = LinearLayoutManager(this)
+        rvFiles.itemAnimator = null
+        fileAdapter = FileRecyclerViewAdapter(
+            this,
+            serverUrl = { viewModel.loadSettings().first },
+            user = { viewModel.loadSettings().second },
+            pass = { viewModel.loadSettings().third },
+            onItemClick = { item, position -> handleFileClick(item, position) }
+        )
+        rvFiles.adapter = fileAdapter
+        rvFiles.addOnItemTouchListener(
+            DragSelectionListener(
+                recyclerView = rvFiles,
+                isSelectionActive = { viewModel.uiState.value?.selectionMode ?: false },
+                onStartSelection = { pos -> viewModel.startSelectionMode(pos) },
+                onDragStart = { anchor, forceAdd -> viewModel.beginRangeSelection(anchor, forceAdd) },
+                onRangeSelect = { anchor, current -> viewModel.selectRange(anchor, current) }
+            )
+        )
+
+        val authTypes = resources.getStringArray(R.array.auth_types)
+        val spinnerAdapter = ArrayAdapter(this, R.layout.spinner_item, authTypes)
+        spinnerAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
+        spAuth.adapter = spinnerAdapter
+        spAuth.background = null
+    }
+
+    private fun setupListeners() {
+        btnTabConnection.setOnClickListener { switchToTab(0) }
+        btnTabBrowser.setOnClickListener { switchToTab(1) }
+        btnTabTasks.setOnClickListener { switchToTab(2) }
+        btnTabHistory.setOnClickListener { switchToTab(3) }
+
+        findViewById<Button>(R.id.btnCreateTask).setOnClickListener {
+            startActivity(Intent(this, TaskWizardActivity::class.java))
+        }
+
+        btnClearHistory.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Очистить историю?")
+                .setPositiveButton("Очистить") { _, _ -> viewModel.clearHistory() }
+                .setNegativeButton("Отмена", null).show()
+        }
+
+        btnConnect.setOnClickListener {
+            val server = etServer.text.toString()
+            val user = etUser.text.toString()
+            val pass = etPass.text.toString()
+            val authType = spAuth.selectedItemPosition
+            viewModel.saveSettings(server, user, pass, authType)
+            viewModel.connect(server, user, pass)
+        }
+
+        btnBack.setOnClickListener {
+            val (server, user, pass) = viewModel.loadSettings()
+            viewModel.navigateBack(server, user, pass)
+        }
+
+        btnNewFolder.setOnClickListener {
+            val input = EditText(this).apply {
+                hint = "Имя папки"
+                setPadding(48, 24, 48, 24)
+                setTextColor(0xFFFFFFFF.toInt())
+                setHintTextColor(0xFF888888.toInt())
+                setBackgroundResource(R.drawable.bg_input_dark)
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Создать папку")
+                .setView(input)
+                .setPositiveButton("Создать") { _, _ ->
+                    val name = input.text.toString().trim()
+                    if (name.isNotEmpty()) {
+                        val (server, user, pass) = viewModel.loadSettings()
+                        viewModel.createFolder(server, name, user, pass)
+                    }
+                }
+                .setNegativeButton("Отмена", null).show()
+        }
+
+        findViewById<Button>(R.id.btnPick).setOnClickListener { picker.launch(arrayOf("*/*")) }
+
+        findViewById<Button>(R.id.btnUpload).setOnClickListener {
+            val (server, user, pass) = viewModel.loadSettings()
+            if (server.isBlank()) { viewModel.log("Ошибка: сервер не подключён"); return@setOnClickListener }
+            if (picked.isEmpty()) { viewModel.log("Нет выбранных файлов"); return@setOnClickListener }
+            showServerFolderPicker(server, user, pass) { targetPath ->
+                viewModel.uploadFilesToPath(server, user, pass, picked, targetPath)
+            }
+        }
+
+        findViewById<Button>(R.id.btnSelDownload).setOnClickListener {
+            val (server, user, pass) = viewModel.loadSettings()
+            viewModel.downloadSelected(server, user, pass)
+        }
+
+        findViewById<Button>(R.id.btnSelDelete).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Удалить элементы?")
+                .setMessage("Выбрано: ${viewModel.getSelectedCount()}")
+                .setPositiveButton("Удалить") { _, _ ->
+                    val (server, user, pass) = viewModel.loadSettings()
+                    viewModel.deleteSelected(server, user, pass)
+                }
+                .setNegativeButton("Отмена", null).show()
+        }
+
+        findViewById<Button>(R.id.btnSelCancel).setOnClickListener { viewModel.exitSelectionMode() }
+    }
+
+    private fun handleFileClick(item: WebDavRepository.FileInfo, position: Int) {
+        val state = viewModel.uiState.value ?: return
+        Log.d(TAG, "handleFileClick: ${item.name}, isDir=${item.isDirectory}, selectionMode=${state.selectionMode}")
+
+        if (state.selectionMode) {
+            viewModel.toggleSelection(position)
+        } else if (item.isDirectory) {
+            val (server, user, pass) = viewModel.loadSettings()
+            if (server.isNotBlank()) {
+                viewModel.browseServer(server, item.path, user, pass)
+            } else {
+                viewModel.log("Ошибка: сервер не подключён")
+            }
+        } else if (FileUtils.isImageFile(item.name)) {
+            val images = viewModel.getImageList()
+            val index = images.indexOfFirst { it.path == item.path }
+            if (index >= 0) showImagePager(images, index)
+        } else if (FileUtils.isVideoFile(item.name)) {
+            viewModel.viewVideo(this, item)
+        } else {
+            val (server, user, pass) = viewModel.loadSettings()
+            viewModel.downloadFile(server, item.path, item.name, user, pass)
+        }
+    }
+
+    private fun showServerFolderPicker(server: String, user: String, pass: String, onFolderSelected: (String) -> Unit) {
+        val base = WebDavRepository.normalizeBaseUrl(server)
+        if (base == null) { viewModel.log("Ошибка: неверный адрес сервера"); return }
+        val root = WebDavRepository.getServerPath(server)
+        showFolderPickerDialog(base, root, user, pass, root, onFolderSelected)
+    }
+
+    private fun showFolderPickerDialog(
+        base: String, root: String, user: String, pass: String,
+        currentPath: String, onFolderSelected: (String) -> Unit
+    ) {
+        lifecycleScope.launch {
+            try {
+                val files = withContext(Dispatchers.IO) {
+                    WebDavRepository.listFiles(base, currentPath, user, pass)
+                }
+                val folders = files.filter { it.isDirectory }.map { it.name }.sorted()
+                val displayItems = mutableListOf<String>()
+                if (currentPath != root) displayItems.add(".. (вверх)")
+                displayItems.addAll(folders)
+                withContext(Dispatchers.Main) {
+                    if (isFinishing || isDestroyed) return@withContext
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Папка: $currentPath")
+                        .setItems(displayItems.toTypedArray()) { _, which ->
+                            val selected = displayItems[which]
+                            if (selected == ".. (вверх)") {
+                                val trimmed = currentPath.trimEnd('/')
+                                val lastSlash = trimmed.lastIndexOf('/')
+                                val newPath = if (lastSlash <= 0) root else trimmed.substring(0, lastSlash + 1)
+                                showFolderPickerDialog(base, root, user, pass, newPath, onFolderSelected)
+                            } else {
+                                val newPath = currentPath.trimEnd('/') + "/" + selected + "/"
+                                showFolderPickerDialog(base, root, user, pass, newPath, onFolderSelected)
+                            }
+                        }
+                        .setPositiveButton("Выбрать эту папку") { _, _ -> onFolderSelected(currentPath) }
+                        .setNegativeButton("Отмена", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                viewModel.log("Ошибка загрузки списка папок: ${e.message}")
+            }
+        }
+    }
+
+    private fun observeViewModel() {
+        viewModel.uiState.observe(this, Observer { state ->
+            updateFileList(state.files)
+            updateLog(state.log)
+            updateSelectionUI(state.selectionMode, state.selectedIndices.size)
+            tvCurrentPath.text = "Путь: ${state.currentPath}"
+        })
+        viewModel.tasks.observe(this, Observer { tasks -> refreshTasks(tasks) })
+        viewModel.history.observe(this, Observer { records -> refreshHistory(records) })
+        viewModel.events.observe(this, Observer { event ->
+            when (event) {
+                is MainViewModel.Event.ShowToast -> {
+                    Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
+                    if (event.message.startsWith("Загрузка:")) {
+                        picked = emptyList()
+                    }
+                }
+                is MainViewModel.Event.SwitchTab -> switchToTab(event.tab)
+            }
+        })
+    }
+
+    private fun updateFileList(files: List<WebDavRepository.FileInfo>) {
+        val state = viewModel.uiState.value
+        fileAdapter.selectionMode = state?.selectionMode ?: false
+        fileAdapter.selectedIndices = state?.selectedIndices?.toMutableSet() ?: mutableSetOf()
+        fileAdapter.submitList(files)
+    }
+
+    private fun updateLog(log: String) {
+        tvLog.text = log
+    }
+
+    // ✅ ИСПРАВЛЕНО: Убран notifyDataSetChanged(), используется более точное обновление
+    private fun updateSelectionUI(selectionMode: Boolean, count: Int) {
+        llSelection.visibility = if (selectionMode) View.VISIBLE else View.GONE
+        tvSelectionCount.text = "Выбрано: $count"
+        fileAdapter.selectionMode = selectionMode
+        fileAdapter.selectedIndices = viewModel.uiState.value?.selectedIndices?.toMutableSet() ?: mutableSetOf()
+        // ✅ notifyItemRangeChanged вместо notifyDataSetChanged для производительности
+        fileAdapter.notifyItemRangeChanged(0, fileAdapter.itemCount, "selection_update")
+    }
+
+    private fun switchToTab(tab: Int) {
+        tabConnection.visibility = View.GONE
+        tabBrowser.visibility = View.GONE
+        tabTasks.visibility = View.GONE
+        tabHistory.visibility = View.GONE
+        btnTabConnection.setBackgroundResource(R.drawable.bg_button_secondary)
+        btnTabBrowser.setBackgroundResource(R.drawable.bg_button_secondary)
+        btnTabTasks.setBackgroundResource(R.drawable.bg_button_secondary)
+        btnTabHistory.setBackgroundResource(R.drawable.bg_button_secondary)
+        val inactiveColor = 0xFFE0E0E0.toInt()
+        btnTabConnection.setTextColor(inactiveColor)
+        btnTabBrowser.setTextColor(inactiveColor)
+        btnTabTasks.setTextColor(inactiveColor)
+        btnTabHistory.setTextColor(inactiveColor)
+
+        when (tab) {
+            0 -> {
+                tabConnection.visibility = View.VISIBLE
+                btnTabConnection.setBackgroundResource(R.drawable.bg_button_primary)
+                btnTabConnection.setTextColor(0xFF000000.toInt())
+            }
+            1 -> {
+                tabBrowser.visibility = View.VISIBLE
+                btnTabBrowser.setBackgroundResource(R.drawable.bg_button_primary)
+                btnTabBrowser.setTextColor(0xFF000000.toInt())
+                val (server, user, pass) = viewModel.loadSettings()
+                val state = viewModel.uiState.value
+                if (server.isNotBlank()
+                    && state?.files.isNullOrEmpty()
+                    && state?.isLoading != true) {
+                    viewModel.browseServer(server, WebDavRepository.getServerPath(server), user, pass)
+                }
+            }
+            2 -> {
+                tabTasks.visibility = View.VISIBLE
+                btnTabTasks.setBackgroundResource(R.drawable.bg_button_primary)
+                btnTabTasks.setTextColor(0xFF000000.toInt())
+                viewModel.refreshTasks()
+            }
+            3 -> {
+                tabHistory.visibility = View.VISIBLE
+                btnTabHistory.setBackgroundResource(R.drawable.bg_button_primary)
+                btnTabHistory.setTextColor(0xFF000000.toInt())
+                viewModel.refreshHistory()
+            }
+        }
+    }
+
+    private fun refreshTasks(tasks: List<SyncTask>) {
+        tasksContainer.removeAllViews()
+        if (tasks.isEmpty()) {
+            tasksContainer.addView(TextView(this).apply {
+                text = "Нет заданий.\nНажмите «➕ Создать задание»."
+                setTextColor(0xFF888888.toInt())
+                gravity = android.view.Gravity.CENTER
+            })
+            return
+        }
+        for (t in tasks) tasksContainer.addView(viewModel.buildTaskCard(this, t))
+    }
+
+    private fun refreshHistory(records: List<HistoryRecord>) {
+        historyContainer.removeAllViews()
+        historyChart.setRecords(records)
+        if (records.isEmpty()) {
+            tvHistoryEmpty.visibility = View.VISIBLE
+            return
+        }
+        tvHistoryEmpty.visibility = View.GONE
+        for (r in records) historyContainer.addView(viewModel.buildHistoryCard(this, r))
+    }
+
+    private fun showImagePager(images: List<WebDavRepository.FileInfo>, startIndex: Int) {
+        viewModel.pagerImages = images
+        val (server, user, pass) = viewModel.loadSettings()
+        val fragment = ImagePagerFragment.newInstance(startIndex, server, user, pass)
+        supportFragmentManager.beginTransaction()
+            .replace(android.R.id.content, fragment)
+            .addToBackStack(null)
+            .commit()
+    }
+
+    private fun loadSettings() {
+        val (server, user, pass) = viewModel.loadSettings()
+        val authType = SecurePrefs.loadAuthType(this)
+        etServer.setText(server)
+        etUser.setText(user)
+        etPass.setText(pass)
+        spAuth.setSelection(authType)
+        if (server.isNotEmpty()) viewModel.log("Настройки загружены")
+    }
+}

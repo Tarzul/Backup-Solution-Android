@@ -12,7 +12,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.text.DecimalFormat
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class HistoryDetailsActivity : AppCompatActivity() {
 
     private val dpToPx: (Int) -> Int = { dp ->

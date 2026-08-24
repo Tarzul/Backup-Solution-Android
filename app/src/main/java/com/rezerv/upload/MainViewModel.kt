@@ -1,5 +1,7 @@
 package com.rezerv.upload
 
+import com.rezerv.upload.ui.TaskCardBuilder
+import com.rezerv.upload.ui.HistoryCardBuilder
 import android.app.Application
 import android.content.Context
 import android.net.Uri
@@ -7,10 +9,22 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.delay     
-import kotlinx.coroutines.isActive  
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    companion object {
+        private const val MAX_IMAGES_IN_PAGER = 500
+        private const val MAX_PARALLEL_UPLOADS = 3
+    }
 
     data class UiState(
         val currentPath: String = "/",
@@ -37,8 +51,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var rangeBase: Set<Int> = emptySet()
     private var rangeModeAdd = true
-    // Список изображений для пейджера (переживает повороты)
+    
+    // ✅ Оптимизация 3: Ограниченный список изображений
     var pagerImages: List<WebDavRepository.FileInfo> = emptyList()
+        private set
+    
+    // ✅ Оптимизация 1: Семафор для параллельных загрузок
+    private val uploadSemaphore = Semaphore(MAX_PARALLEL_UPLOADS)
+    
+    // ✅ Оптимизация 4: Кольцевой буфер для логов
+    private val logBuffer = CircularLogBuffer(maxLines = 200, maxChars = 20000)
 
     // ==================== Настройки (SecurePrefs) ====================
     fun loadSettings(): Triple<String, String, String> =
@@ -73,7 +95,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 appendLog("✓ Соединение установлено (HTTP ${result.code})")
                 appendLog("   Возможности: ${result.capabilities}")
                 val testPath = WebDavRepository.getServerPath(server)
-                // Выставляем корень сервера ДО переключения вкладки
                 _uiState.value = _uiState.value?.copy(currentPath = testPath, isLoading = true)
                 browseServer(server, testPath, user, pass)
                 _events.value = Event.SwitchTab(1)
@@ -87,16 +108,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun browseServer(server: String, path: String, user: String, pass: String) {
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
-            appendLog(" Получение списка: $path")
+            appendLog("📋 Получение списка: $path")
         
-            // ИСПРАВЛЕНО: одно атомарное обновление с currentPath
             val files = WebDavRepository.listFiles(base, path, user, pass)
             val sorted = files.sortedWith(
                 compareBy<WebDavRepository.FileInfo> { !it.isDirectory }.thenBy { it.name }
             )
         
             _uiState.value = _uiState.value?.copy(
-                currentPath = path,  // ✅ Сохраняем путь
+                currentPath = path,
                 files = sorted,
                 isLoading = false,
                 selectionMode = false,
@@ -108,7 +128,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ИСПРАВЛЕНО: добавлены отладочные логи для диагностики проблемы с возвратом назад
     fun navigateBack(server: String, user: String, pass: String) {
         val currentPath = _uiState.value?.currentPath ?: "/"
         val root = WebDavRepository.getServerPath(server)
@@ -191,19 +210,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun getImageList(): List<WebDavRepository.FileInfo> =
         _uiState.value?.files?.filter { !it.isDirectory && FileUtils.isImageFile(it.name) } ?: emptyList()
 
-    // ==================== Загрузка файлов ====================
+    // ✅ Оптимизация 3: Ограничение размера списка изображений
+    fun setPagerImages(images: List<WebDavRepository.FileInfo>) {
+        pagerImages = if (images.size > MAX_IMAGES_IN_PAGER) {
+            images.take(MAX_IMAGES_IN_PAGER)
+        } else {
+            images
+        }
+    }
+
+    // ==================== ПАРАЛЛЕЛЬНАЯ загрузка файлов ====================
     fun uploadFilesToPath(
         server: String, user: String, pass: String,
         uris: List<Uri>, targetPath: String
     ) {
-        appendLog("=== uploadFilesToPath ===")
+        appendLog("=== uploadFilesToPath (параллельная загрузка) ===")
         appendLog("Сервер: $server")
         appendLog("Папка: $targetPath")
-        appendLog("Файлов: ${uris.size}")
+        appendLog("Файлов: ${uris.size} (макс. $MAX_PARALLEL_UPLOADS параллельно)")
+        
         if (uris.isEmpty()) {
             _events.value = Event.ShowToast("Нет файлов для загрузки")
             return
         }
+        
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server)
             if (base == null) {
@@ -211,12 +241,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _events.value = Event.ShowToast("Ошибка: неверный адрес сервера")
                 return@launch
             }
+            
             val total = uris.size
-            var success = 0
-            var failed = 0
             val startTime = System.currentTimeMillis()
 
-            // НОВОЕ: live-запись + переключение на вкладку ИСТОРИЯ (как у заданий)
             HistoryManager.createLiveRecord(getApplication(), startTime, "Ручная загрузка", "user")
             refreshHistory()
             _events.value = Event.SwitchTab(3)
@@ -228,47 +256,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            // ✅ Параллельная загрузка через async + semaphore
+            val deferredResults = uris.mapIndexed { index, uri ->
+                async(Dispatchers.IO) {
+                    uploadSemaphore.withPermit {
+                        val meta = WebDavRepository.getFileMetadata(getApplication(), uri)
+                        val remotePath = targetPath.trimEnd('/') + "/" + meta.name
+                        appendLog("[$index/$total] Загрузка: ${meta.name} (${FileUtils.formatSize(meta.size)})")
+
+                        HistoryManager.updateLiveRecord(getApplication(), startTime, meta.name, index + 1, total)
+
+                        val fileStart = System.currentTimeMillis()
+                        try {
+                            val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                            if (inputStream == null) {
+                                appendLog("✗ [$index/$total] Не удалось открыть: ${meta.name}")
+                                return@withPermit Triple(false, meta.name, 0L to 0L)
+                            }
+                            
+                            val code = inputStream.use { input ->
+                                WebDavClient.put(
+                                    base + WebDavRepository.encodePath(remotePath),
+                                    user, pass, input
+                                )
+                            }
+                            
+                            val fileMs = System.currentTimeMillis() - fileStart
+                            if (code in 200..299) {
+                                appendLog("✓ [$index/$total] ${meta.name} загружен")
+                                Triple(true, meta.name, meta.size to fileMs)
+                            } else {
+                                appendLog("✗ [$index/$total] ${meta.name}: HTTP $code")
+                                Triple(false, meta.name, 0L to fileMs)
+                            }
+                        } catch (e: Exception) {
+                            appendLog("✗ [$index/$total] ${meta.name}: ${e.javaClass.simpleName}: ${e.message}")
+                            Triple(false, meta.name, 0L to (System.currentTimeMillis() - fileStart))
+                        }
+                    }
+                }
+            }
+
+            // Ждём завершения всех загрузок
+            val results = deferredResults.awaitAll()
+
             val fileDetails = mutableListOf<SyncFileDetail>()
+            var success = 0
+            var failed = 0
             var totalBytes = 0L
             var totalTransferMs = 0L
 
-            uris.forEachIndexed { index, uri ->
-                val meta = WebDavRepository.getFileMetadata(getApplication(), uri)
-                val remotePath = targetPath.trimEnd('/') + "/" + meta.name
-                appendLog("Загрузка: ${meta.name} -> $remotePath (${meta.size} байт)")
-
-                // НОВОЕ: live-прогресс в историю
-                HistoryManager.updateLiveRecord(getApplication(), startTime, meta.name, index + 1, total)
-
-                val fileStart = System.currentTimeMillis()
-                try {
-                    val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
-                    if (inputStream == null) {
-                        appendLog("✗ Не удалось открыть файл: ${meta.name}")
-                        failed++
-                        return@forEachIndexed
-                    }
-                    val code = inputStream.use { input ->
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            WebDavClient.put(
-                                base + WebDavRepository.encodePath(remotePath),
-                                user, pass, input
-                            )
-                        }
-                    }
-                    val fileMs = System.currentTimeMillis() - fileStart
-                    if (code in 200..299) {
-                        appendLog("✓ ${meta.name} загружен (HTTP $code)")
-                        success++
-                        fileDetails.add(SyncFileDetail(meta.name, meta.size, fileMs, "Пользователь"))
-                        totalBytes += meta.size
-                        totalTransferMs += fileMs
-                    } else {
-                        appendLog("✗ ${meta.name}: HTTP $code")
-                        failed++
-                    }
-                } catch (e: Exception) {
-                    appendLog("✗ ${meta.name}: ${e.javaClass.simpleName}: ${e.message}")
+            results.forEach { (isSuccess, fileName, bytesAndMs) ->
+                val (bytes, ms) = bytesAndMs
+                if (isSuccess) {
+                    success++
+                    totalBytes += bytes
+                    totalTransferMs += ms
+                    fileDetails.add(SyncFileDetail(fileName, bytes, ms, "Пользователь"))
+                } else {
                     failed++
                 }
             }
@@ -293,88 +338,78 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 totalFiles = total
             ))
 
-            appendLog("Завершено: успешно $success, ошибок $failed")
+            appendLog("✓ Завершено: $success / $total (ошибок: $failed)")
             _events.value = Event.ShowToast("Загрузка: $success / $total")
-            // picked очищается в MainActivity по ShowToast с префиксом "Загрузка:"
             refreshHistory()
             browseServer(server, _uiState.value?.currentPath ?: "/", user, pass)
         }
     }
 
     // ==================== Операции с файлами ====================
-fun deleteSelected(server: String, user: String, pass: String) {
-    viewModelScope.launch {
-        val state = _uiState.value ?: return@launch
-        val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
-        val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
-        if (selected.isEmpty()) return@launch
-        exitSelectionMode()
-        
-        var successCount = 0
-        var errorCount = 0
-        
-        selected.forEach { file ->
-            val result = WebDavRepository.deleteFile(base, file.path, user, pass)
-            when (result) {
-                is WebDavResult.Success -> {
-                    appendLog("✓ Удалено: ${file.name}")
-                    successCount++
-                }
-                else -> {
-                    appendLog("✗ Не удалось удалить: ${file.name} (${result.errorMessage()})")
-                    errorCount++
-                }
-            }
-        }
-        
-        _events.value = Event.ShowToast("Удалено: $successCount, ошибок: $errorCount")
-        browseServer(server, state.currentPath, user, pass)
-    }
-}
-
-fun downloadSelected(server: String, user: String, pass: String) {
-    viewModelScope.launch {
-        val state = _uiState.value ?: return@launch
-        val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
-        val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
-        if (selected.isEmpty()) return@launch
-        exitSelectionMode()
-        
-        var successCount = 0
-        var errorCount = 0
-        
-        selected.filter { !it.isDirectory }.forEach { file ->
-            val result = WebDavRepository.downloadFile(
-                getApplication(), base, file.path, file.name, user, pass
-            )
-            when (result) {
-                is WebDavRepository.DownloadResult.Success -> {
-                    appendLog("✓ Скачано: ${file.name} (${formatSize(result.bytesDownloaded)})")
-                    successCount++
-                }
-                is WebDavRepository.DownloadResult.HttpError -> {
-                    appendLog("✗ ${file.name}: HTTP ${result.code}")
-                    errorCount++
-                }
-                is WebDavRepository.DownloadResult.IoError -> {
-                    appendLog("✗ ${file.name}: ${result.message}")
-                    errorCount++
+    fun deleteSelected(server: String, user: String, pass: String) {
+        viewModelScope.launch {
+            val state = _uiState.value ?: return@launch
+            val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
+            val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
+            if (selected.isEmpty()) return@launch
+            exitSelectionMode()
+            
+            var successCount = 0
+            var errorCount = 0
+            
+            selected.forEach { file ->
+                val result = WebDavRepository.deleteFile(base, file.path, user, pass)
+                when (result) {
+                    is WebDavResult.Success -> {
+                        appendLog("✓ Удалено: ${file.name}")
+                        successCount++
+                    }
+                    else -> {
+                        appendLog("✗ Не удалось удалить: ${file.name} (${result.errorMessage()})")
+                        errorCount++
+                    }
                 }
             }
+            
+            _events.value = Event.ShowToast("Удалено: $successCount, ошибок: $errorCount")
+            browseServer(server, state.currentPath, user, pass)
         }
-        
-        _events.value = Event.ShowToast("Скачано: $successCount, ошибок: $errorCount")
     }
-}
 
-// ✅ Вспомогательная функция для форматирования размера
-private fun formatSize(b: Long): String = when {
-    b < 0 -> "—"
-    b < 1024 -> "$b Б"
-    b < 1024 * 1024 -> String.format("%.1f КБ", b / 1024.0)
-    b < 1024L * 1024 * 1024 -> String.format("%.1f МБ", b / (1024.0 * 1024))
-    else -> String.format("%.2f ГБ", b / (1024.0 * 1024 * 1024))
-}
+    fun downloadSelected(server: String, user: String, pass: String) {
+        viewModelScope.launch {
+            val state = _uiState.value ?: return@launch
+            val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
+            val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
+            if (selected.isEmpty()) return@launch
+            exitSelectionMode()
+            
+            var successCount = 0
+            var errorCount = 0
+            
+            selected.filter { !it.isDirectory }.forEach { file ->
+                val result = WebDavRepository.downloadFile(
+                    getApplication(), base, file.path, file.name, user, pass
+                )
+                when (result) {
+                    is WebDavRepository.DownloadResult.Success -> {
+                        appendLog("✓ Скачано: ${file.name} (${FileUtils.formatSize(result.bytesDownloaded)})")
+                        successCount++
+                    }
+                    is WebDavRepository.DownloadResult.HttpError -> {
+                        appendLog("✗ ${file.name}: HTTP ${result.code}")
+                        errorCount++
+                    }
+                    is WebDavRepository.DownloadResult.IoError -> {
+                        appendLog("✗ ${file.name}: ${result.message}")
+                        errorCount++
+                    }
+                }
+            }
+            
+            _events.value = Event.ShowToast("Скачано: $successCount, ошибок: $errorCount")
+        }
+    }
 
     fun downloadFile(server: String, path: String, fileName: String, user: String, pass: String) {
         viewModelScope.launch {
@@ -387,7 +422,7 @@ private fun formatSize(b: Long): String = when {
         
             when (result) {
                 is WebDavRepository.DownloadResult.Success -> {
-                    appendLog("✓ Скачано: $fileName (${formatSize(result.bytesDownloaded)})")
+                    appendLog("✓ Скачано: $fileName (${FileUtils.formatSize(result.bytesDownloaded)})")
                     _events.value = Event.ShowToast("Скачано: $fileName")
                 }
                 is WebDavRepository.DownloadResult.HttpError -> {
@@ -405,7 +440,7 @@ private fun formatSize(b: Long): String = when {
     fun viewVideo(context: Context, item: WebDavRepository.FileInfo) {
         viewModelScope.launch {
             _events.value = Event.ShowToast("Скачивание видео: ${item.name}")
-            val file = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val file = withContext(Dispatchers.IO) {
                 try {
                     val (s, u, p) = SecurePrefs.loadCredentials(getApplication())
                     val base = WebDavRepository.normalizeBaseUrl(s) ?: return@withContext null
@@ -457,19 +492,19 @@ private fun formatSize(b: Long): String = when {
 
     // ==================== Задания и история ====================
     fun refreshTasks() {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             _tasks.postValue(TaskManager.load(getApplication()))
         }
     }
 
     fun refreshHistory() {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             _history.postValue(HistoryManager.getRecords(getApplication()))
         }
     }
 
     fun clearHistory() {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             HistoryManager.clear(getApplication())
             _history.postValue(HistoryManager.getRecords(getApplication()))
         }
@@ -479,7 +514,6 @@ private fun formatSize(b: Long): String = when {
         viewModelScope.launch {
             val startTime = System.currentTimeMillis()
             
-            // НОВОЕ: защита от двойного запуска
             if (!HistoryManager.createLiveRecord(getApplication(), startTime, t.name, "user", t.id)) {
                 _events.value = Event.ShowToast("Задание уже выполняется")
                 return@launch
@@ -496,10 +530,10 @@ private fun formatSize(b: Long): String = when {
                 }
             }
             
-            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 SyncEngine.runTask(
                     getApplication(), t, trigger = "user",
-                    startTime = startTime,   // НОВОЕ
+                    startTime = startTime,
                     onProgress = { m -> appendLog(m) },
                     onLiveUpdate = { name, idx, total ->
                         HistoryManager.updateLiveRecord(getApplication(), startTime, name, idx, total)
@@ -512,7 +546,7 @@ private fun formatSize(b: Long): String = when {
                 lastRun = System.currentTimeMillis(),
                 lastStatus = if (result.errors == 0) "ok" else "error"
             )
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            withContext(Dispatchers.IO) {
                 TaskManager.upsert(getApplication(), updated)
             }
             AlarmScheduler.scheduleNext(getApplication())
@@ -522,7 +556,7 @@ private fun formatSize(b: Long): String = when {
     }
 
     fun deleteTask(t: SyncTask) {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             TaskManager.delete(getApplication(), t.id)
             AlarmScheduler.scheduleNext(getApplication())
             _tasks.postValue(TaskManager.load(getApplication()))
@@ -531,365 +565,17 @@ private fun formatSize(b: Long): String = when {
 
     fun log(message: String) { appendLog(message) }
 
+    // ✅ Оптимизация 4: Кольцевой буфер для логов
     private fun appendLog(message: String) {
-        val current = _uiState.value?.log ?: ""
-        val newLog = current + message + "\n"
-        _uiState.postValue(_uiState.value?.copy(
-            log = if (newLog.length > 20000) newLog.takeLast(20000) else newLog
-        ) ?: UiState(log = newLog))
+        logBuffer.add(message)
+        _uiState.postValue(_uiState.value?.copy(log = logBuffer.getText()) ?: UiState(log = logBuffer.getText()))
     }
 
-    // ==================== Карточки заданий ====================
-    fun buildTaskCard(context: Context, t: SyncTask): android.view.View {
-        val cardColor: Int
-        val strokeColor: Int
-        when {
-            !t.scheduleEnabled -> {
-                cardColor = 0xFF6D6D6D.toInt()
-                strokeColor = 0xFFBDBDBD.toInt()
-            }
-            t.lastStatus == "error" -> {
-                cardColor = 0xFF4A2D2D.toInt()
-                strokeColor = 0xFFE57373.toInt()
-            }
-            else -> {
-                cardColor = 0xFF2D4A2D.toInt()
-                strokeColor = 0xFF81C784.toInt()
-            }
-        }
-        val card = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            val gd = android.graphics.drawable.GradientDrawable()
-            gd.setColor(cardColor)
-            gd.cornerRadius = 24f
-            gd.setStroke(2, strokeColor)
-            background = gd
-            setPadding(24, 20, 24, 20)
-            val lp = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.setMargins(0, 8, 0, 8)
-            layoutParams = lp
-            setOnClickListener {
-                context.startActivity(
-                    android.content.Intent(context, TaskDetailsActivity::class.java)
-                        .putExtra("taskId", t.id)
-                )
-            }
-        }
-        card.addView(android.widget.TextView(context).apply {
-            text = t.name
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-        })
-        card.addView(android.widget.TextView(context).apply {
-            text = when (t.syncType) {
-                "two_way" -> "⇄ Двусторонняя"
-                "to_left" -> "← В левую папку"
-                else -> "→ В правую папку"
-            }
-            setTextColor(0xFFAAAAAA.toInt())
-            textSize = 12f
-        })
-        card.addView(android.widget.TextView(context).apply {
-            text = if (t.lastRun > 0) "📅 ${formatDateTime(t.lastRun)}" else "Ещё не запускалось"
-            setTextColor(0xFFCCCCCC.toInt())
-            textSize = 12f
-        })
-        card.addView(android.widget.TextView(context).apply {
-            text = if (t.scheduleEnabled) "⏰ Расписание: ${scheduleLabel(t)}" else "⏰ Расписание выключено"
-            setTextColor(0xFFCCCCCC.toInt())
-            textSize = 12f
-        })
-        val row = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            val lp = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = 14
-            layoutParams = lp
-        }
-        row.addView(android.widget.Button(context).apply {
-            text = "▶ ЗАПУСК"
-            setBackgroundResource(R.drawable.bg_button_primary)
-            setTextColor(0xFF000000.toInt())
-            setOnClickListener { runTaskNow(t) }
-            val bpl = android.widget.LinearLayout.LayoutParams(
-                0,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-            layoutParams = bpl
-        })
-        row.addView(android.widget.Button(context).apply {
-            text = "✏️"
-            setBackgroundResource(R.drawable.bg_button_secondary)
-            setTextColor(0xFFE0E0E0.toInt())
-            setOnClickListener {
-                context.startActivity(
-                    android.content.Intent(context, TaskDetailsActivity::class.java)
-                        .putExtra("taskId", t.id)
-                )
-            }
-            val bpl = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            bpl.leftMargin = 12
-            layoutParams = bpl
-        })
-        row.addView(android.widget.Button(context).apply {
-            text = "🗑"
-            setBackgroundResource(R.drawable.bg_button_danger)
-            setTextColor(0xFFFFFFFF.toInt())
-            setOnClickListener {
-                androidx.appcompat.app.AlertDialog.Builder(context)
-                    .setTitle("Удалить задание?")
-                    .setMessage("Задание \"${t.name}\" будет удалено безвозвратно.")
-                    .setPositiveButton("Удалить") { _, _ ->
-                        deleteTask(t)
-                    }
-                    .setNegativeButton("Отмена", null)
-                    .show()
-            }
-            val bpl = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            bpl.leftMargin = 12
-            layoutParams = bpl
-        })
-        card.addView(row)
-        return card
-    }
-
-    // ==================== Карточки истории ====================
-    fun buildHistoryCard(context: Context, r: HistoryRecord): android.view.View {
-        val isRunning = r.status == "running"
-        val isOk = r.status == "ok"
-        val cardColor = when {
-            isRunning -> 0xFF1E3A5F.toInt()
-            isOk -> 0xFF2D4A2D.toInt()
-            else -> 0xFF4A2D2D.toInt()
-        }
-        val strokeColor = when {
-            isRunning -> 0xFF64B5F6.toInt()
-            isOk -> 0xFF81C784.toInt()
-            else -> 0xFFE57373.toInt()
-        }
-        
-        val card = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            val gd = android.graphics.drawable.GradientDrawable()
-            gd.setColor(cardColor)
-            gd.cornerRadius = 24f
-            gd.setStroke(2, strokeColor)
-            background = gd
-            setPadding(24, 20, 24, 20)
-            val lp = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.setMargins(0, 8, 0, 8)
-            layoutParams = lp
-            if (!isRunning) {
-                setOnClickListener {
-                    context.startActivity(
-                        android.content.Intent(context, HistoryDetailsActivity::class.java)
-                            .putExtra("time", r.time)
-                    )
-                }
-            }
-        }
-        
-        val top = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        top.addView(android.widget.TextView(context).apply {
-            text = r.taskName.ifBlank { "Синхронизация" }
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        top.addView(android.widget.TextView(context).apply {
-            text = when {
-                isRunning -> "⏳"
-                isOk -> "✔"
-                else -> "✖"
-            }
-            setTextColor(when {
-                isRunning -> 0xFF64B5F6.toInt()
-                isOk -> 0xFF81C784.toInt()
-                else -> 0xFFE57373.toInt()
-            })
-            textSize = 22f
-        })
-        card.addView(top)
-        
-        if (isRunning) {
-            // НОВОЕ: live-карточка
-            val elapsed = System.currentTimeMillis() - r.liveStartedAt
-            card.addView(cardRow(context, "🔄 Выполняется...", "⏱ ${formatDuration(elapsed)}"))
-            
-            if (r.totalFiles > 0) {
-                val pb = android.widget.ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
-                    max = r.totalFiles
-                    progress = r.currentFileIndex
-                    val lp = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                    )
-                    lp.topMargin = 12
-                    layoutParams = lp
-                }
-                card.addView(pb)
-                
-                card.addView(android.widget.TextView(context).apply {
-                    text = "📄 ${r.currentFileIndex} из ${r.totalFiles}"
-                    setTextColor(0xFFCCCCCC.toInt())
-                    textSize = 13f
-                    val lp = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                    )
-                    lp.topMargin = 4
-                    layoutParams = lp
-                })
-            }
-            
-            if (r.currentFileName.isNotEmpty()) {
-                card.addView(android.widget.TextView(context).apply {
-                    text = "▸ ${r.currentFileName}"
-                    setTextColor(0xFF64B5F6.toInt())
-                    textSize = 12f
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-                    val lp = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                    )
-                    lp.topMargin = 4
-                    layoutParams = lp
-                })
-            }
-            
-            if (r.currentFileIndex > 0 && r.totalFiles > r.currentFileIndex) {
-                val avgPerFile = elapsed.toFloat() / r.currentFileIndex
-                val etaMs = (avgPerFile * (r.totalFiles - r.currentFileIndex)).toLong()
-                card.addView(android.widget.TextView(context).apply {
-                    text = "⏱ Осталось примерно: ${formatDuration(etaMs)}"
-                    setTextColor(0xFFAAAAAA.toInt())
-                    textSize = 11f
-                    val lp = android.widget.LinearLayout.LayoutParams(
-                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                    )
-                    lp.topMargin = 4
-                    layoutParams = lp
-                })
-            }
-        } else {
-            // Финальная карточка
-            card.addView(cardRow(context, "📅 ${formatDateTime(r.time)}", "⏱ ${formatDuration(r.durationMs)}"))
-            card.addView(cardRow(context, "🔍 Проверено: ${r.checked}", "⬆ Передано: ${r.uploaded + r.downloaded}"))
-            if (r.uploaded > 0 || r.downloaded > 0) {
-                card.addView(cardRow(context, "⬆ Загружено: ${r.uploaded} ф.", "⬇ Скачано: ${r.downloaded} ф."))
-            }
-            if (r.bytesTransferred > 0) {
-                val speed = if (r.transferMs > 0) {
-                    val v = (r.bytesTransferred / 1048576.0) / (r.transferMs / 1000.0)
-                    if (v >= 1) String.format("%.1f МБ/с", v) else "${FileUtils.formatSize((r.bytesTransferred / (r.transferMs / 1000.0)).toLong())}/с"
-                } else "—"
-                card.addView(cardRow(context, "💾 ${FileUtils.formatSize(r.bytesTransferred)}", "⚡ $speed"))
-            }
-            card.addView(cardRow(context, "✗ Ошибок: ${r.errors}", triggerLabel(r.trigger)))
-        }
-        
-        return card
-    }
-    
-    // НОВОЕ: парсинг JSON файлов из HistoryRecord
-    private fun parseFilesJson(json: String?): List<SyncFileDetail> {
-        if (json.isNullOrBlank()) return emptyList()
-        return try {
-            val arr = org.json.JSONArray(json)
-            (0 until arr.length()).mapNotNull { i ->
-                val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-                SyncFileDetail(
-                    name = obj.optString("n", ""),
-                    size = obj.optLong("s", 0),
-                    ms = obj.optLong("m", 0),
-                    side = obj.optString("d", "")
-                )
-            }
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    private fun cardRow(context: Context, left: String, right: String): android.view.View {
-        val row = android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            val lp = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = 8
-            layoutParams = lp
-        }
-        row.addView(android.widget.TextView(context).apply {
-            text = left
-            setTextColor(0xFFCCCCCC.toInt())
-            textSize = 13f
-            layoutParams = android.widget.LinearLayout.LayoutParams(
-                0,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        })
-        row.addView(android.widget.TextView(context).apply {
-            text = right
-            setTextColor(0xFFCCCCCC.toInt())
-            textSize = 13f
-        })
-        return row
-    }
-
-    // ==================== Утилиты ====================
-    private fun scheduleLabel(t: SyncTask): String = when (t.scheduleMode) {
-        "minutes" -> "каждые ${t.intervalValue} мин"
-        "hourly" -> "каждые ${t.intervalValue} ч"
-        "daily" -> "ежедневно ${String.format("%02d:%02d", t.hour, t.minute)}"
-        "weekly" -> "еженедельно ${String.format("%02d:%02d", t.hour, t.minute)}"
-        "monthly" -> "ежемесячно ${String.format("%02d:%02d", t.hour, t.minute)}"
-        else -> t.scheduleMode
-    }
-
-    private fun formatDateTime(time: Long): String =
-        java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()).format(java.util.Date(time))
-
-        private fun formatDuration(ms: Long): String {
-        val totalSec = ms / 1000
-        val h = totalSec / 3600
-        val m = (totalSec % 3600) / 60
-        val s = totalSec % 60
-        return when {
-            h > 0 -> "${h}ч ${m}м"
-            m > 0 -> "${m}м ${s}с"
-            else -> "${s}с"
-        }
-    }
-
-    private fun triggerLabel(t: String): String = when (t) {
-        "user" -> "👤 Пользователь"
-        "test" -> "🧪 Тест"
-        "schedule" -> "⏰ Расписание"
-        else -> "•"
+    // ✅ Оптимизация 3: Очистка памяти при уничтожении ViewModel
+    override fun onCleared() {
+        super.onCleared()
+        pagerImages = emptyList()
+        logBuffer.clear()
     }
 
     private fun filesToJson(list: List<SyncFileDetail>): String {

@@ -11,7 +11,9 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class TaskWizardActivity : AppCompatActivity() {
     private var editTaskId: String? = null
     private var editingTask: SyncTask? = null

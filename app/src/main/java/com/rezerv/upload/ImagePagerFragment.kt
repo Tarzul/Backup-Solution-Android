@@ -16,10 +16,13 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import coil.load
 import coil.request.ImageRequest
+import com.rezerv.upload.viewmodel.BrowserViewModel
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
 
-    private val viewModel: MainViewModel by activityViewModels()
+    private val browserVM: BrowserViewModel by activityViewModels()
 
     private var images: List<WebDavRepository.FileInfo> = emptyList()
     private var server = ""
@@ -53,7 +56,7 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        images = viewModel.pagerImages
+        images = browserVM.pagerImages
         if (images.isEmpty()) {
             parentFragmentManager.popBackStack()
             return
@@ -126,7 +129,7 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             override fun onPageSelected(position: Int) = updatePageUI(position)
         })
 
-        viewModel.uiState.observe(viewLifecycleOwner) { updateSelectionIndicators() }
+        browserVM.state.observe(viewLifecycleOwner) { updateSelectionIndicators() }
 
         val start = arguments?.getInt("start") ?: 0
         if (images.isNotEmpty()) {
@@ -172,15 +175,15 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
 
     // ==================== Выделение ====================
     private fun isImageSelected(f: WebDavRepository.FileInfo): Boolean {
-        val state = viewModel.uiState.value ?: return false
+        val state = browserVM.state.value ?: return false
         val idx = state.files.indexOfFirst { it.path == f.path }
         return idx >= 0 && state.selectedIndices.contains(idx)
     }
 
     private fun toggleSelectionFor(f: WebDavRepository.FileInfo) {
-        val state = viewModel.uiState.value ?: return
+        val state = browserVM.state.value ?: return
         val idx = state.files.indexOfFirst { it.path == f.path }
-        if (idx >= 0) viewModel.toggleSelection(idx)
+        if (idx >= 0) browserVM.toggleSelection(idx)
     }
 
     // ==================== UI ====================

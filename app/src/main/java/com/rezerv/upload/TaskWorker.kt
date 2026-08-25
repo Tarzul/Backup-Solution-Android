@@ -7,12 +7,20 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
 import android.util.Log
+import androidx.hilt.work.HiltWorker  // ✅ ДОБАВЛЕНО
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import dagger.assisted.Assisted  // ✅ ДОБАВЛЕНО
+import dagger.assisted.AssistedInject  // ✅ ДОБАВЛЕНО
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+@HiltWorker
+class TaskWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted workerParams: WorkerParameters,
+    private val repository: TaskRepository
+) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
         private const val TAG = "TaskWorker"
@@ -25,10 +33,10 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             Log.d(TAG, "▶ doWork: taskId=$taskId, попытка=$runAttemptCount")
 
             val tasksToRun = if (!taskId.isNullOrBlank()) {
-                val t = TaskManager.getById(applicationContext, taskId)
+                val t = repository.getTaskById(taskId) // ✅ Используем repository
                 if (t != null && t.scheduleEnabled) listOf(t) else emptyList()
             } else {
-                TaskManager.getActiveTasks(applicationContext)
+                repository.getActiveTasks() // ✅ Используем repository
             }
 
             if (tasksToRun.isEmpty()) return@withContext Result.success()
@@ -59,7 +67,7 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     )
 
                     val status = if (result.errors == 0) "ok" else "error"
-                    TaskManager.upsert(applicationContext, task.copy(
+                    repository.saveTask(task.copy( // ✅ Используем repository
                         lastRun = System.currentTimeMillis(), lastStatus = status))
                     totalErrors += result.errors
 
@@ -71,7 +79,8 @@ class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 } catch (e: Exception) {
                     Log.e(TAG, "'${task.name}' упало", e)
                     totalErrors++
-                    TaskManager.upsert(applicationContext, task.copy(
+                    // ✅ ИСПРАВЛЕНО: было TaskManager.upsert, стало repository.saveTask
+                    repository.saveTask(task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = "error"))
                     if (task.notifyOnError)
                         NotificationHelper.showResult(applicationContext, task.name, false, 1)

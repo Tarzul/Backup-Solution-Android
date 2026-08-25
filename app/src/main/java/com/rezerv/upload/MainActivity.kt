@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
 
 import com.rezerv.upload.utils.Validators
+import androidx.lifecycle.lifecycleScope
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
@@ -188,7 +189,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // TasksViewModel
-        tasksVM.tasks.observe(this) { tasks -> refreshTasks(tasks) }
+        lifecycleScope.launch {
+            tasksVM.tasks.collect { tasks -> refreshTasks(tasks) }
+        }  
         tasksVM.log.observe(this) { log -> tvLog.text = log }
         tasksVM.events.observe(this) { event ->
             when (event) {

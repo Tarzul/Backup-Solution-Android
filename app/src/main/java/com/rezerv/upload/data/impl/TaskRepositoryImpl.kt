@@ -1,37 +1,83 @@
 package com.rezerv.upload.data.impl
 
-import android.content.Context
 import com.rezerv.upload.SyncTask
-import com.rezerv.upload.TaskManager
 import com.rezerv.upload.data.TaskRepository
+import com.rezerv.upload.data.local.TaskDao
+import com.rezerv.upload.data.local.TaskEntity
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Реализация TaskRepository через существующий TaskManager.
- * Паттерн "Адаптер" — позволяет мигрировать постепенно.
- */
 @Singleton
-class TaskRepositoryImpl @Inject constructor() : TaskRepository {
+class TaskRepositoryImpl @Inject constructor(
+    private val taskDao: TaskDao
+) : TaskRepository {
 
-    override fun load(context: Context): List<SyncTask> =
-        TaskManager.load(context)
+    override fun getAllTasks(): Flow<List<SyncTask>> {
+        return taskDao.getAllTasks().map { entities ->
+            entities.map { it.toDomainModel() }
+        }
+    }
 
-    override fun save(context: Context, tasks: List<SyncTask>) =
-        TaskManager.save(context, tasks)
+    override suspend fun getTaskById(id: String): SyncTask? {
+        return taskDao.getTaskById(id)?.toDomainModel()
+    }
 
-    override fun upsert(context: Context, task: SyncTask) =
-        TaskManager.upsert(context, task)
+    override suspend fun getActiveTasks(): List<SyncTask> {
+        return taskDao.getActiveTasks().map { it.toDomainModel() }
+    }
 
-    override fun delete(context: Context, id: String) =
-        TaskManager.delete(context, id)
+    override suspend fun saveTask(task: SyncTask) {
+        taskDao.insertTask(task.toEntity())
+    }
 
-    override fun getById(context: Context, id: String): SyncTask? =
-        TaskManager.getById(context, id)
+    override suspend fun deleteTask(id: String) {
+        taskDao.deleteTaskById(id)
+    }
 
-    override fun getActiveTasks(context: Context): List<SyncTask> =
-        TaskManager.getActiveTasks(context)
+    override suspend fun clear() {
+        taskDao.clearAll()
+    }
+}
 
-    override fun clear(context: Context) =
-        TaskManager.clear(context)
+// Extension functions для маппинга между Entity и Domain Model
+private fun TaskEntity.toDomainModel(): SyncTask {
+    return SyncTask(
+        id = id,
+        name = name,
+        leftLocalUri = leftLocalUri,
+        rightWebdavPath = rightWebdavPath,
+        leftIsWebdav = leftIsWebdav,
+        syncType = syncType,
+        scheduleEnabled = scheduleEnabled,
+        scheduleIntervalMinutes = scheduleIntervalMinutes,
+        useWifi = useWifi,
+        useMobile = useMobile,
+        onlyCharging = onlyCharging,
+        notifyOnSuccess = notifyOnSuccess,
+        notifyOnError = notifyOnError,
+        lastRun = lastRun,
+        lastStatus = lastStatus
+    )
+}
+
+private fun SyncTask.toEntity(): TaskEntity {
+    return TaskEntity(
+        id = id,
+        name = name,
+        leftLocalUri = leftLocalUri,
+        rightWebdavPath = rightWebdavPath,
+        leftIsWebdav = leftIsWebdav,
+        syncType = syncType,
+        scheduleEnabled = scheduleEnabled,
+        scheduleIntervalMinutes = scheduleIntervalMinutes,
+        useWifi = useWifi,
+        useMobile = useMobile,
+        onlyCharging = onlyCharging,
+        notifyOnSuccess = notifyOnSuccess,
+        notifyOnError = notifyOnError,
+        lastRun = lastRun,
+        lastStatus = lastStatus
+    )
 }

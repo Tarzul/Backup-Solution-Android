@@ -1,17 +1,13 @@
 package com.rezerv.upload.data
 
-import android.content.Context
 import com.rezerv.upload.SyncTask
+import kotlinx.coroutines.flow.Flow
 
-/**
- * Интерфейс репозитория заданий синхронизации.
- */
 interface TaskRepository {
-    fun load(context: Context): List<SyncTask>
-    fun save(context: Context, tasks: List<SyncTask>)
-    fun upsert(context: Context, task: SyncTask)
-    fun delete(context: Context, id: String)
-    fun getById(context: Context, id: String): SyncTask?
-    fun getActiveTasks(context: Context): List<SyncTask>
-    fun clear(context: Context)
+    fun getAllTasks(): Flow<List<SyncTask>>
+    suspend fun getTaskById(id: String): SyncTask?
+    suspend fun getActiveTasks(): List<SyncTask>
+    suspend fun saveTask(task: SyncTask)
+    suspend fun deleteTask(id: String)
+    suspend fun clear()
 }

@@ -13,20 +13,19 @@ import com.rezerv.upload.data.TaskRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
-/**
- * ViewModel для вкладки "Задания".
- */
 @HiltViewModel
 class TasksViewModel @Inject constructor(
     application: Application,
-    private val taskRepo: TaskRepository,         // ✅ Внедрение
-    private val historyRepo: HistoryRepository,   // ✅ Внедрение
-    private val syncScheduler: SyncScheduler      // ✅ Внедрение
+    private val taskRepo: TaskRepository,
+    private val historyRepo: HistoryRepository,
+    private val syncScheduler: SyncScheduler
 ) : AndroidViewModel(application) {
 
     sealed class TaskEvent {
@@ -35,8 +34,9 @@ class TasksViewModel @Inject constructor(
         data class TaskCompleted(val taskName: String, val errors: Int) : TaskEvent()
     }
 
-    private val _tasks = MutableLiveData<List<SyncTask>>(emptyList())
-    val tasks: LiveData<List<SyncTask>> = _tasks
+    // ✅ Используем Flow из Room (автоматическое обновление UI)
+    val tasks = taskRepo.getAllTasks()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _events = MutableLiveData<TaskEvent>()
     val events: LiveData<TaskEvent> = _events
@@ -47,28 +47,17 @@ class TasksViewModel @Inject constructor(
     private val _isRunning = MutableLiveData(false)
     val isRunning: LiveData<Boolean> = _isRunning
 
-    // ==================== CRUD ====================
-
-    fun refreshTasks() {
-        viewModelScope.launch(Dispatchers.IO) {
-            _tasks.postValue(taskRepo.load(getApplication()))
-        }
-    }
-
     fun deleteTask(task: SyncTask) {
         viewModelScope.launch(Dispatchers.IO) {
             syncScheduler.cancelForTask(getApplication(), task)
-            taskRepo.delete(getApplication(), task.id)
+            taskRepo.deleteTask(task.id) // ✅ Без context
             syncScheduler.scheduleNext(getApplication())
-            _tasks.postValue(taskRepo.load(getApplication()))
         }
     }
 
     fun ensureScheduler() {
         syncScheduler.scheduleNext(getApplication())
     }
-
-    // ==================== Запуск задания ====================
 
     fun runTaskNow(task: SyncTask) {
         viewModelScope.launch {
@@ -90,7 +79,6 @@ class TasksViewModel @Inject constructor(
                 }
             }
 
-            // ⚠️ SyncEngine пока не мигрирован — будет в Этапе 5.3
             val result = withContext(Dispatchers.IO) {
                 SyncEngine.runTask(
                     getApplication(), task, trigger = "user",
@@ -110,17 +98,14 @@ class TasksViewModel @Inject constructor(
                 lastStatus = if (result.errors == 0) "ok" else "error"
             )
             withContext(Dispatchers.IO) {
-                taskRepo.upsert(getApplication(), updated)
+                taskRepo.saveTask(updated) // ✅ Без context
             }
             syncScheduler.scheduleNext(getApplication())
-            refreshTasks()
 
             _events.value = TaskEvent.TaskCompleted(task.name, result.errors)
             appendLog("■ Завершено: ${task.name} (ошибок: ${result.errors})")
         }
     }
-
-    // ==================== Логирование ====================
 
     fun log(message: String) = appendLog(message)
 

@@ -7,11 +7,12 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
 import android.util.Log
-import androidx.hilt.work.HiltWorker  // ✅ ДОБАВЛЕНО
+import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import dagger.assisted.Assisted  // ✅ ДОБАВЛЕНО
-import dagger.assisted.AssistedInject  // ✅ ДОБАВЛЕНО
+import com.rezerv.upload.data.TaskRepository
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 

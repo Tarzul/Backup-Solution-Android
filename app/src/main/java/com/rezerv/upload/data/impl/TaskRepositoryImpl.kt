@@ -11,7 +11,7 @@ import javax.inject.Singleton
 
 @Singleton
 class TaskRepositoryImpl @Inject constructor(
-    private val taskDao: TaskDao
+    private val taskDao: TaskDao  // ✅ ВАЖНО: инжектим TaskDao
 ) : TaskRepository {
 
     override fun getAllTasks(): Flow<List<SyncTask>> {
@@ -41,7 +41,6 @@ class TaskRepositoryImpl @Inject constructor(
     }
 }
 
-// Extension functions для маппинга между Entity и Domain Model
 private fun TaskEntity.toDomainModel(): SyncTask {
     return SyncTask(
         id = id,

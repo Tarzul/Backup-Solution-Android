@@ -22,6 +22,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
+// ==================== Provides (конкретные объекты) ====================
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
@@ -35,14 +36,16 @@ object AppModule {
             AppDatabase::class.java,
             "rezerv_database"
         )
-        .fallbackToDestructiveMigration() // Удаляет старые данные при обновлении схемы
+        .fallbackToDestructiveMigration()
         .build()
     }
 
+    // ✅ TaskDao из Database
     @Provides
     fun provideTaskDao(db: AppDatabase): TaskDao = db.taskDao()
 }
 
+// ==================== Binds (интерфейсы к реализациям) ====================
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class AppModuleBindings {

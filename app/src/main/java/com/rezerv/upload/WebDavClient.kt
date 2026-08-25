@@ -188,12 +188,30 @@ object WebDavClient {
         return executeAsync(request).use { it.code }
     }
 
-    suspend fun head(url: String, user: String, pass: String): Int {
+    suspend fun head(url: String, user: String, pass: String): Response {
         val request = Request.Builder()
             .url(url)
             .head()
             .withAuth(user, pass)
             .build()
-        return executeAsync(request).use { it.code }
+        return executeAsync(request)
+    }
+
+    suspend fun getWithHeaders(
+        url: String,
+        user: String,
+        pass: String,
+        headers: Map<String, String>
+    ): Response {
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .get()
+            .withAuth(user, pass)
+
+        headers.forEach { (key, value) ->
+            requestBuilder.addHeader(key, value)
+        }
+
+        return executeAsync(requestBuilder.build())
     }
 }

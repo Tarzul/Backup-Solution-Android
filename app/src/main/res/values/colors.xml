@@ -27,4 +27,8 @@
     <color name="file_folder">#64B5F6</color>
     <color name="file_image">#CE93D8</color>
     <color name="file_video">#FFB74D</color>
+    <!-- ==================== Skeleton Colors ==================== -->
+    <color name="skeleton_base">#2A2A2A</color>
+    <color name="skeleton_shimmer">#3D3D3D</color>
+    <color name="skeleton_highlight">#4A4A4A</color>
 </resources>

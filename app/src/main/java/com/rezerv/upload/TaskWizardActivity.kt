@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
+import com.rezerv.upload.utils.Validators
 
 @AndroidEntryPoint
 class TaskWizardActivity : AppCompatActivity() {
@@ -286,22 +287,103 @@ class TaskWizardActivity : AppCompatActivity() {
         }
     }
 
-    // ИСПРАВЛЕНО: валидация пары «ровно один WebDAV» (зам. 18)
     private fun validateCurrentStep(): Boolean {
         when (currentStep) {
             1 -> {
-                val ok = if (leftIsWebdav) leftWebdavPath.isNotBlank() else leftLocalUri.isNotBlank()
-                if (!ok) { toast("Выберите левую папку"); return false }
+                // Валидация левой папки
+                if (leftIsWebdav) {
+                    if (leftWebdavPath.isBlank()) {
+                        toast("Выберите WebDAV папку слева")
+                        return false
+                    }
+                    val error = Validators.validateWebDavPath(leftWebdavPath)
+                    if (error != null) {
+                        toast("Левая папка: $error")
+                        return false
+                    }
+                } else {
+                    if (leftLocalUri.isBlank()) {
+                        toast("Выберите локальную папку слева")
+                        return false
+                    }
+                }
             }
             2 -> {
-                val ok = if (rightIsWebdav) rightWebdavPath.isNotBlank() else rightLocalUri.isNotBlank()
-                if (!ok) { toast("Выберите правую папку"); return false }
-                if (leftIsWebdav == rightIsWebdav) { toast("Пара некорректна: ровно одна папка должна быть WebDAV"); return false }
+                // Валидация правой папки
+                if (rightIsWebdav) {
+                    if (rightWebdavPath.isBlank()) {
+                        toast("Выберите WebDAV папку справа")
+                        return false
+                    }
+                    val error = Validators.validateWebDavPath(rightWebdavPath)
+                    if (error != null) {
+                        toast("Правая папка: $error")
+                        return false
+                    }
+                } else {
+                    if (rightLocalUri.isBlank()) {
+                        toast("Выберите локальную папку справа")
+                        return false
+                    }
+                }    
+            
+                // Проверка: ровно одна WebDAV папка
+                if (leftIsWebdav == rightIsWebdav) {
+                    toast("Одна папка должна быть локальной, другая — WebDAV")
+                    return false
+                }
+            }
+            3 -> {
+                // Валидация расписания
+                if (scheduleEnabled) {
+                    // Время (hour и minute уже в переменных)
+                    val timeError = Validators.validateTime(hour, minute)
+                    if (timeError != null) {
+                        toast(timeError)
+                        return false
+                    }
+
+                    when (scheduleMode) {
+                        "minutes" -> {
+                            val error = Validators.validateIntervalMinutes(intervalValue)
+                            if (error != null) {
+                                toast("Интервал: $error")
+                                return false
+                            }
+                        }
+                        "hourly" -> {
+                            val error = Validators.validateIntervalHours(intervalValue)
+                            if (error != null) {
+                                toast("Интервал: $error")
+                                return false
+                            }
+                        }
+                        "weekly" -> {
+                            if (selectedWeekDays.isEmpty()) {
+                                toast("Выберите хотя бы один день недели")
+                                return false
+                            }
+                        }   
+                        "monthly" -> {
+                            if (selectedMonthDays.isEmpty()) {
+                                toast("Выберите хотя бы одно число месяца")
+                                return false
+                            }
+                        }
+                    }
+                }
             }
             4 -> {
-                taskName = findViewById<EditText>(R.id.etTaskName).text.toString().trim()
-                if (taskName.isBlank()) { toast("Введите имя задания"); return false }
-                if (leftIsWebdav == rightIsWebdav) { toast("Пара некорректна: ровно одна папка должна быть WebDAV"); return false }
+                // Валидация имени задания
+                val name = findViewById<EditText>(R.id.etTaskName).text.toString().trim()
+                val error = Validators.validateTaskName(name)
+                if (error != null) {
+                    val nameInput = findViewById<EditText>(R.id.etTaskName)
+                    nameInput.error = error
+                    nameInput.requestFocus()
+                    toast(error)
+                    return false
+                }
             }
         }
         return true

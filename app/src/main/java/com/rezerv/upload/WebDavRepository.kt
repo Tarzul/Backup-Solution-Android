@@ -78,13 +78,17 @@ object WebDavRepository {
             }
         }
 
-    // ==================== Скачивание (с деталями) ====================
+// ==================== Скачивание (streaming + докачка) ====================
 
     sealed class DownloadResult {
         data class Success(val bytesDownloaded: Long) : DownloadResult()
         data class HttpError(val code: Int, val url: String) : DownloadResult()
         data class IoError(val message: String) : DownloadResult()
     }
+
+    private const val BUFFER_SIZE = 64 * 1024                      // 64 КБ буфер
+    private const val PROGRESS_UPDATE_INTERVAL_MS = 500L           // Обновление прогресса
+    private const val MIN_CHUNK_FOR_RESUME = 10 * 1024 * 1024L     // 10 МБ минимум для докачки
 
     suspend fun downloadFile(
         context: Context,
@@ -97,52 +101,143 @@ object WebDavRepository {
     ): DownloadResult = withContext(Dispatchers.IO) {
         try {
             val url = server + encodePath(remotePath)
-            val resp = WebDavClient.get(url, user, pass)
 
-            if (resp.code !in 200..299) {
-                resp.close()
-                return@withContext DownloadResult.HttpError(resp.code, url)
+            // ====== ШАГ 1: HEAD запрос для получения размера ======
+            val headResp = WebDavClient.head(url, user, pass)
+            if (headResp.code !in 200..299) {
+                headResp.close()
+                return@withContext DownloadResult.HttpError(headResp.code, url)
             }
+            val totalSize = headResp.header("Content-Length")?.toLongOrNull() ?: -1L
+            val supportsRange = headResp.header("Accept-Ranges")?.equals("bytes", ignoreCase = true) == true
+            headResp.close()
 
-            var downloaded = 0L
-            val outputResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // ====== ШАГ 2: Подготовка локального файла ======
+            val useTempFile = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && supportsRange && totalSize > MIN_CHUNK_FOR_RESUME
+        
+            val tempFile: java.io.File?
+            val mediaStoreUri: Uri?
+            var existingBytes = 0L
+
+            if (useTempFile) {
+                // Android < 10: используем temp file с возможностью докачки
+                @Suppress("DEPRECATION")
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val backupDir = java.io.File(dir, "BackupSolution").apply { mkdirs() }
+                tempFile = java.io.File(backupDir, "$fileName.tmp")
+                mediaStoreUri = null
+            
+                // Проверяем существующий temp для докачки
+                if (tempFile.exists() && tempFile.length() > 0 && tempFile.length() < totalSize) {
+                    existingBytes = tempFile.length()
+                    Log.d(TAG, "Возобновление загрузки с ${FileUtils.formatSize(existingBytes)}")
+                } else if (tempFile.exists() && tempFile.length() >= totalSize && totalSize > 0) {
+                    // Файл уже полностью загружен — просто rename
+                    val finalFile = java.io.File(backupDir, fileName)
+                    tempFile.renameTo(finalFile)
+                    return@withContext DownloadResult.Success(totalSize)
+                }
+            } else {
+                // Android 10+: MediaStore (без докачки)
+                tempFile = null
                 val cv = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, fileName)
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
                 }
-                val uri = context.contentResolver.insert(
+                mediaStoreUri = context.contentResolver.insert(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv
                 )
-                if (uri == null) {
-                    resp.close()
+                if (mediaStoreUri == null) {
                     return@withContext DownloadResult.IoError("Не удалось создать файл в Downloads")
                 }
-                context.contentResolver.openOutputStream(uri)
+            }
+
+            // ====== ШАГ 3: GET запрос (с Range если нужно) ======
+            val headers = mutableMapOf<String, String>()
+            if (existingBytes > 0) {
+                headers["Range"] = "bytes=$existingBytes-"
+            }
+        
+            val response = if (headers.isNotEmpty()) {
+                WebDavClient.getWithHeaders(url, user, pass, headers)
             } else {
-                @Suppress("DEPRECATION")
-                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                dir.mkdirs()
-                FileOutputStream(java.io.File(dir, fileName))
+                WebDavClient.get(url, user, pass)
             }
 
-            if (outputResult == null) {
-                resp.close()
-                return@withContext DownloadResult.IoError("Не удалось открыть поток записи")
+            if (response.code !in 200..299 && response.code != 206) {
+                response.close()
+                return@withContext DownloadResult.HttpError(response.code, url)
             }
 
-            outputResult.use { output ->
-                resp.body?.byteStream()?.use { input ->
-                    val buf = ByteArray(64 * 1024)
-                    var r: Int
-                    while (input.read(buf).also { r = it } != -1) {
-                        output.write(buf, 0, r)
-                        downloaded += r
-                        onProgress?.invoke(downloaded)
+            val inputStream = response.body?.byteStream()
+                ?: return@withContext DownloadResult.IoError("Пустой ответ от сервера").also { response.close() }
+
+            // ====== ШАГ 4: Streaming запись с прогрессом ======
+            var downloadedBytes = existingBytes
+            var lastProgressTime = 0L
+
+            val appendMode = existingBytes > 0 && response.code == 206
+        
+            try {
+                val outputStream = if (useTempFile && tempFile != null) {
+                    FileOutputStream(tempFile, appendMode)
+                } else if (mediaStoreUri != null) {
+                    context.contentResolver.openOutputStream(mediaStoreUri, if (appendMode) "wa" else "w")
+                } else {
+                    null
+                }
+
+                if (outputStream == null) {
+                    response.close()
+                    return@withContext DownloadResult.IoError("Не удалось открыть поток записи")
+                }
+
+                outputStream.use { output ->
+                    inputStream.use { input ->
+                        val buffer = ByteArray(BUFFER_SIZE)
+                        var bytesRead: Int
+
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            downloadedBytes += bytesRead
+
+                            // Обновляем прогресс не чаще чем раз в 500 мс
+                            val now = System.currentTimeMillis()
+                            if (onProgress != null && now - lastProgressTime >= PROGRESS_UPDATE_INTERVAL_MS) {
+                                onProgress(downloadedBytes)
+                                lastProgressTime = now
+                            }
+                        }
                     }
                 }
+            } catch (e: java.io.IOException) {
+                response.close()
+                Log.e(TAG, "Download IO error", e)
+                // temp file остаётся для докачки в следующий раз
+                return@withContext DownloadResult.IoError("Ошибка записи: ${e.message}. Загружено: ${FileUtils.formatSize(downloadedBytes)}")
+            }   
+
+            response.close()
+
+            // ====== ШАГ 5: Финализация ======
+            if (useTempFile && tempFile != null) {
+                // Переименовываем temp в финальный
+                @Suppress("DEPRECATION")
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val finalFile = java.io.File(java.io.File(dir, "BackupSolution"), fileName)
+                if (finalFile.exists()) finalFile.delete()
+                val renamed = tempFile.renameTo(finalFile)
+                if (!renamed) {
+                    return@withContext DownloadResult.IoError("Не удалось переименовать временный файл")
+                }
+            } else if (mediaStoreUri != null) {
+                // Снимаем флаг IS_PENDING
+                val cv = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                context.contentResolver.update(mediaStoreUri, cv, null, null)
             }
-            resp.close()
-            DownloadResult.Success(downloaded)
+
+            DownloadResult.Success(downloadedBytes)
 
         } catch (e: java.io.IOException) {
             Log.e(TAG, "Download IO error", e)

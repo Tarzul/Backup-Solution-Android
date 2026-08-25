@@ -29,6 +29,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
 
+import com.rezerv.upload.utils.Validators
+
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
@@ -73,6 +75,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var historyContainer: LinearLayout
     private lateinit var tvHistoryEmpty: TextView
     private lateinit var btnClearHistory: Button
+
+    // Skeleton screens
+    private lateinit var skeletonFiles: View
+    private lateinit var skeletonTasks: LinearLayout
+    private lateinit var skeletonHistory: LinearLayout
 
     private var picked: List<Uri> = emptyList()
     private lateinit var fileAdapter: FileRecyclerViewAdapter
@@ -205,6 +212,25 @@ class MainActivity : AppCompatActivity() {
     // ==================== UI Updates ====================
 
     private fun updateFileList(state: BrowserViewModel.BrowserState) {
+        // Skeleton: показываем при загрузке
+        if (state.isLoading) {
+            skeletonFiles.visibility = View.VISIBLE
+            rvFiles.visibility = View.GONE
+        } else {
+            // Плавное появление контента
+            if (skeletonFiles.visibility == View.VISIBLE) {
+                rvFiles.alpha = 0f
+                rvFiles.visibility = View.VISIBLE
+                rvFiles.animate()
+                    .alpha(1f)
+                    .setDuration(300)
+                    .withEndAction { skeletonFiles.visibility = View.GONE }
+                    .start()
+            } else {
+                rvFiles.visibility = View.VISIBLE
+            }
+        }   
+
         fileAdapter.selectionMode = state.selectionMode
         fileAdapter.selectedIndices = state.selectedIndices.toMutableSet()
         fileAdapter.submitList(state.files)
@@ -221,6 +247,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshTasks(tasks: List<SyncTask>) {
+        // Skeleton показываем только при первой загрузке
+        if (tasks.isEmpty() && tasksVM.tasks.value == null) {
+            skeletonTasks.visibility = View.VISIBLE
+            tasksContainer.visibility = View.GONE
+        } else {
+            // Плавное появление контента
+            if (skeletonTasks.visibility == View.VISIBLE) {
+                tasksContainer.alpha = 0f
+                tasksContainer.visibility = View.VISIBLE
+                tasksContainer.animate()
+                    .alpha(1f)
+                    .setDuration(300)
+                    .withEndAction { skeletonTasks.visibility = View.GONE }
+                    .start()
+            } else {
+                tasksContainer.visibility = View.VISIBLE
+            }
+        }
+
         tasksContainer.removeAllViews()
         if (tasks.isEmpty()) {
             tasksContainer.addView(TextView(this).apply {
@@ -245,6 +290,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshHistory(records: List<HistoryRecord>) {
+        // Skeleton показываем только при первой загрузке
+        if (records.isEmpty() && historyVM.records.value == null) {
+            skeletonHistory.visibility = View.VISIBLE
+            historyContainer.visibility = View.GONE
+            tvHistoryEmpty.visibility = View.GONE
+        } else {
+            // Плавное появление контента
+            if (skeletonHistory.visibility == View.VISIBLE) {
+                historyContainer.alpha = 0f
+                historyContainer.visibility = View.VISIBLE
+                historyContainer.animate()
+                    .alpha(1f)
+                    .setDuration(300)
+                    .withEndAction { skeletonHistory.visibility = View.GONE }
+                    .start()
+            } else {
+                historyContainer.visibility = View.VISIBLE
+            }
+        }
+
         historyContainer.removeAllViews()
         historyChart.setRecords(records)
         if (records.isEmpty()) {
@@ -262,7 +327,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         for (r in records) historyContainer.addView(historyBuilder.build(r, listener))
-    }
+    }   
 
     // ==================== Init Views ====================
 
@@ -292,6 +357,9 @@ class MainActivity : AppCompatActivity() {
         historyContainer = findViewById(R.id.historyContainer)
         tvHistoryEmpty = findViewById(R.id.tvHistoryEmpty)
         btnClearHistory = findViewById(R.id.btnClearHistory)
+        skeletonFiles = findViewById(R.id.skeletonFiles)
+        skeletonTasks = findViewById(R.id.skeletonTasks)
+        skeletonHistory = findViewById(R.id.skeletonHistory)
 
         rvFiles.layoutManager = LinearLayoutManager(this)
         rvFiles.itemAnimator = null
@@ -342,14 +410,48 @@ class MainActivity : AppCompatActivity() {
             val user = etUser.text.toString()
             val pass = etPass.text.toString()
             val authType = spAuth.selectedItemPosition
+
+            // ✅ Валидация URL
+            val serverError = Validators.validateServerUrl(server)
+            if (serverError != null) {
+                Toast.makeText(this, serverError, Toast.LENGTH_SHORT).show()
+                etServer.error = serverError
+                etServer.requestFocus()
+                return@setOnClickListener
+            }
+
+            // ✅ Валидация логина
+            val userError = Validators.validateUsername(user)
+            if (userError != null) {
+                Toast.makeText(this, userError, Toast.LENGTH_SHORT).show()
+                etUser.error = userError
+                etUser.requestFocus()
+                return@setOnClickListener
+            }
+
+            // ✅ Валидация пароля
+            val passError = Validators.validatePassword(pass)
+            if (passError != null) {
+                Toast.makeText(this, passError, Toast.LENGTH_SHORT).show()
+                etPass.error = passError
+                etPass.requestFocus()
+             return@setOnClickListener
+            }
+
+            // Все проверки пройдены
+            etServer.error = null
+            etUser.error = null
+            etPass.error = null
+    
             connectionVM.saveSettings(server, user, pass, authType)
             connectionVM.connect(server, user, pass)
-        }
+        }   
 
         btnBack.setOnClickListener {
             val (server, user, pass) = connectionVM.loadSettings()
             browserVM.navigateBack(server, user, pass)
         }
+
 
         btnNewFolder.setOnClickListener {
             val input = EditText(this).apply {
@@ -358,16 +460,21 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(0xFFFFFFFF.toInt())
                 setHintTextColor(0xFF888888.toInt())
                 setBackgroundResource(R.drawable.bg_input_dark)
+                filters = arrayOf(android.text.InputFilter.LengthFilter(255))  // ✅ Ограничение длины
             }
             AlertDialog.Builder(this)
                 .setTitle("Создать папку")
                 .setView(input)
                 .setPositiveButton("Создать") { _, _ ->
                     val name = input.text.toString().trim()
-                    if (name.isNotEmpty()) {
-                        val (server, user, pass) = connectionVM.loadSettings()
-                        browserVM.createFolder(server, name, user, pass)
+                    // ✅ Валидация
+                    val error = Validators.validateFolderName(name)
+                    if (error != null) {
+                        Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
                     }
+                    val (server, user, pass) = connectionVM.loadSettings()
+                    browserVM.createFolder(server, name, user, pass)
                 }
                 .setNegativeButton("Отмена", null).show()
         }

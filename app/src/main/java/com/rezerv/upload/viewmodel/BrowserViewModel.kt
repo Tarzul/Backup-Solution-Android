@@ -260,13 +260,36 @@ class BrowserViewModel @Inject constructor(
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             appendLog("⬇ Скачивание: $fileName")
 
+            var lastBytes = 0L
+            var lastTime = System.currentTimeMillis()
+
             val result = webDavService.downloadFile(
                 getApplication(), base, path, fileName, user, pass
-            )
+            ) { bytesDownloaded ->
+                // Callback прогресса — вызывается каждые 500 мс из Repository
+                val now = System.currentTimeMillis()
+                val elapsed = now - lastTime
+            
+                if (elapsed >= 1000) {
+                    val bytesPerSecond = ((bytesDownloaded - lastBytes) * 1000.0 / elapsed).toLong()
+                    val speedMB = bytesPerSecond / 1048576.0
+                
+                    val speedText = if (speedMB >= 1.0) {
+                        String.format("%.1f МБ/с", speedMB)
+                    } else {
+                        "${bytesPerSecond / 1024} КБ/с"
+                    }
+                
+                    appendLog("📥 ${FileUtils.formatSize(bytesDownloaded)} ($speedText)")
+                
+                    lastBytes = bytesDownloaded
+                    lastTime = now
+                }
+            }
 
             when (result) {
                 is WebDavRepository.DownloadResult.Success -> {
-                    appendLog("✓ Скачано: $fileName")
+                    appendLog("✓ Скачано: $fileName (${FileUtils.formatSize(result.bytesDownloaded)})")
                     _events.value = BrowserEvent.ShowToast("Скачано: $fileName")
                 }
                 is WebDavRepository.DownloadResult.HttpError -> {

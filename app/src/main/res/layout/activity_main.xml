@@ -33,13 +33,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="https://server.com/webdav/"
-                android:inputType="textUri"
+                android:inputType="textUri|textNoSuggestions"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/hint_gray"
                 android:background="@drawable/bg_input_dark"
                 android:padding="12dp"
                 android:layout_marginTop="4dp"
-                android:importantForAutofill="no" />
+                android:importantForAutofill="no"
+                android:maxLength="500"
+                android:maxLines="1"
+                android:imeOptions="actionNext"
+                android:singleLine="true" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -54,13 +58,17 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="user"
-                android:inputType="text"
+                android:inputType="text|textNoSuggestions"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/hint_gray"
                 android:background="@drawable/bg_input_dark"
                 android:padding="12dp"
                 android:layout_marginTop="4dp"
-                android:importantForAutofill="no" />
+                android:importantForAutofill="no"
+                android:maxLength="200"
+                android:maxLines="1"
+                android:imeOptions="actionNext"
+                android:singleLine="true" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -81,7 +89,11 @@
                 android:background="@drawable/bg_input_dark"
                 android:padding="12dp"
                 android:layout_marginTop="4dp"
-                android:importantForAutofill="no" />
+                android:importantForAutofill="no"
+                android:maxLength="500"
+                android:maxLines="1"
+                android:imeOptions="actionDone"
+                android:singleLine="true" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -117,9 +129,6 @@
                 android:textColor="@color/text_secondary"
                 android:textStyle="bold" />
 
-            <!-- ИСПРАВЛЕНО: фиксированная высота 260dp.
-                 Прежняя комбинация height=0dp + weight=1 внутри родителя wrap-content
-                 давала нулевую высоту, и журнал был невидим. -->
             <ScrollView
                 android:layout_width="match_parent"
                 android:layout_height="260dp"
@@ -276,6 +285,16 @@
             </LinearLayout>
         </LinearLayout>
 
+                <!-- ✅ Skeleton для загрузки списка файлов -->
+        <include
+            android:id="@+id/skeletonFiles"
+            layout="@layout/skeleton_file_list"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rvFiles"
             android:layout_width="match_parent"
@@ -309,6 +328,19 @@
                 android:background="@drawable/bg_button_primary"
                 android:textColor="@color/black"
                 android:textStyle="bold" />
+            <!-- ✅ Skeleton для заданий -->
+            <LinearLayout
+                android:id="@+id/skeletonTasks"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="12dp"
+                android:visibility="gone">
+                <include layout="@layout/skeleton_task_card" />
+                <include layout="@layout/skeleton_task_card" />
+                <include layout="@layout/skeleton_task_card" />
+            </LinearLayout>
+
             <LinearLayout
                 android:id="@+id/tasksContainer"
                 android:layout_width="match_parent"
@@ -359,6 +391,19 @@
                 android:layout_height="180dp"
                 android:layout_marginTop="12dp"
                 android:background="@drawable/bg_rounded_dark" />
+            <!-- ✅ Skeleton для истории -->
+            <LinearLayout
+                android:id="@+id/skeletonHistory"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="12dp"
+                android:visibility="gone">
+                <include layout="@layout/skeleton_history_card" />
+                <include layout="@layout/skeleton_history_card" />
+                <include layout="@layout/skeleton_history_card" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/tvHistoryEmpty"
                 android:layout_width="match_parent"

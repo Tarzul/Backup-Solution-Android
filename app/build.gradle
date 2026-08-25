@@ -154,4 +154,6 @@ dependencies {
 
     // Для потоковой работы с файлами (Okio уже есть, но убедитесь)
     implementation("com.squareup.okio:okio:3.9.0")
+
+    implementation 'androidx.work:work-runtime-ktx:2.9.0'
 }

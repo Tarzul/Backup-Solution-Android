@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.*
+import kotlin.coroutines.coroutineContext
 import com.rezerv.upload.utils.ProgressThrottler
 
 object SyncEngine {
@@ -69,8 +70,9 @@ object SyncEngine {
         try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
             if (wifiManager != null && wifiManager.isWifiEnabled) {
+                @Suppress("DEPRECATION")
                 wifiLock = wifiManager.createWifiLock(
-                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, 
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL,  // ✅ Не deprecated
                     "RezervApp:WifiLock"
                 ).apply {
                     setReferenceCounted(false)
@@ -257,15 +259,20 @@ object SyncEngine {
                     res.errors++
                     res.errorList.add(SyncErrorDetail(name, "не удалось открыть"))
                 } else {
+                    // ✅ Получаем CoroutineScope из suspend-контекста
+                    val scope = CoroutineScope(coroutineContext)
+                    
                     input.use {
-                        // ✅ ИСПРАВЛЕНО: Используем ProgressThrottler
-                        val throttledProgress = ProgressThrottler { written, total ->
-                            live(name, written, total)
-                        }
+                        val throttledProgress = ProgressThrottler(
+                            scope = scope,  // ✅ Передаем правильный scope
+                            onUpdate = { written, total ->
+                                live(name, written.toInt(), total.toInt())
+                            }
+                        )
 
                         val code = WebDavClient.put(
                             url = server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name),
-                            user = user, 
+                            user = user,
                             pass = pass,
                             inputStream = it,
                             fileSize = f.length(),
@@ -288,7 +295,6 @@ object SyncEngine {
                     }
                 }
             } catch (ce: kotlinx.coroutines.CancellationException) {
-                // ✅ КРИТИЧНО: Пробрасываем CancellationException для корректной отмены
                 throw ce
             } catch (e: Exception) {
                 progress("   ✗ $name: ${e.message}")
@@ -353,12 +359,14 @@ object SyncEngine {
                     continue
                 }
 
-                var size = 0L
+                val scope = CoroutineScope(coroutineContext)
                 
-                // ✅ ИСПРАВЛЕНО: Используем ProgressThrottler вместо ThrottledProgress
-                val throttledProgress = ProgressThrottler { written, total ->
-                    live(e.name, written, total)
-                }
+                val throttledProgress = ProgressThrottler(
+                    scope = scope,
+                    onUpdate = { written, total ->
+                        live(e.name, written.toInt(), total.toInt())
+                    }
+                )
 
                 val downloadResult = context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
                     WebDavClient.downloadStreaming(
@@ -367,7 +375,6 @@ object SyncEngine {
                         pass = pass,
                         outputStream = out,
                         onProgress = { written, total ->
-                            // ✅ ИСПРАВЛЕНО: Используем .emit() вместо .update()
                             throttledProgress.emit(written, total)
                         }
                     )
@@ -375,10 +382,10 @@ object SyncEngine {
 
                 downloadResult.fold(
                     onSuccess = { bytesCopied ->
-                        size = bytesCopied
+                        // ✅ Используем bytesCopied напрямую
                         res.downloaded++
-                        res.bytes += size
-                        res.files.add(SyncFileDetail(e.name, size, System.currentTimeMillis() - t0, side))
+                        res.bytes += bytesCopied
+                        res.files.add(SyncFileDetail(e.name, bytesCopied, System.currentTimeMillis() - t0, side))
                         progress("   ✓ ${e.name}")
                     },
                     onFailure = { exception ->

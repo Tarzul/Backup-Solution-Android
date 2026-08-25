@@ -11,7 +11,7 @@ import javax.inject.Singleton
 
 @Singleton
 class TaskRepositoryImpl @Inject constructor(
-    private val taskDao: TaskDao  // ✅ ВАЖНО: инжектим TaskDao
+    private val taskDao: TaskDao
 ) : TaskRepository {
 
     override fun getAllTasks(): Flow<List<SyncTask>> {
@@ -45,12 +45,20 @@ private fun TaskEntity.toDomainModel(): SyncTask {
     return SyncTask(
         id = id,
         name = name,
-        leftLocalUri = leftLocalUri,
-        rightWebdavPath = rightWebdavPath,
-        leftIsWebdav = leftIsWebdav,
         syncType = syncType,
+        leftIsWebdav = leftIsWebdav,
+        leftLocalUri = leftLocalUri,
+        leftWebdavPath = leftWebdavPath,
+        rightIsWebdav = rightIsWebdav,
+        rightLocalUri = rightLocalUri,
+        rightWebdavPath = rightWebdavPath,
         scheduleEnabled = scheduleEnabled,
-        scheduleIntervalMinutes = scheduleIntervalMinutes,
+        scheduleMode = scheduleMode,
+        intervalValue = intervalValue,
+        hour = hour,
+        minute = minute,
+        weekDays = weekDays,
+        monthDays = monthDays,
         useWifi = useWifi,
         useMobile = useMobile,
         onlyCharging = onlyCharging,
@@ -65,12 +73,20 @@ private fun SyncTask.toEntity(): TaskEntity {
     return TaskEntity(
         id = id,
         name = name,
-        leftLocalUri = leftLocalUri,
-        rightWebdavPath = rightWebdavPath,
-        leftIsWebdav = leftIsWebdav,
         syncType = syncType,
+        leftIsWebdav = leftIsWebdav,
+        leftLocalUri = leftLocalUri,
+        leftWebdavPath = leftWebdavPath,
+        rightIsWebdav = rightIsWebdav,
+        rightLocalUri = rightLocalUri,
+        rightWebdavPath = rightWebdavPath,
         scheduleEnabled = scheduleEnabled,
-        scheduleIntervalMinutes = scheduleIntervalMinutes,
+        scheduleMode = scheduleMode,
+        intervalValue = intervalValue,
+        hour = hour,
+        minute = minute,
+        weekDays = weekDays,
+        monthDays = monthDays,
         useWifi = useWifi,
         useMobile = useMobile,
         onlyCharging = onlyCharging,

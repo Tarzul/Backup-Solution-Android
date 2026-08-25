@@ -30,11 +30,12 @@ import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
 
 import com.rezerv.upload.utils.Validators
-import androidx.lifecycle.lifecycleScope
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
+    private var isTasksFirstLoad = true
+    private var isHistoryFirstLoad = true  
 
     // ✅ 4 ViewModel вместо одной
     private val connectionVM: ConnectionViewModel by viewModels()
@@ -139,7 +140,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (tabTasks.visibility == View.VISIBLE) tasksVM.refreshTasks()
         if (tabHistory.visibility == View.VISIBLE) historyVM.refreshHistory()
         checkExactAlarmStatus()
     }
@@ -191,7 +191,7 @@ class MainActivity : AppCompatActivity() {
         // TasksViewModel
         lifecycleScope.launch {
             tasksVM.tasks.collect { tasks -> refreshTasks(tasks) }
-        }  
+        } 
         tasksVM.log.observe(this) { log -> tvLog.text = log }
         tasksVM.events.observe(this) { event ->
             when (event) {
@@ -250,23 +250,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshTasks(tasks: List<SyncTask>) {
-        // Skeleton показываем только при первой загрузке
-        if (tasks.isEmpty() && tasksVM.tasks.value == null) {
+        if (tasks.isEmpty() && isTasksFirstLoad) {
             skeletonTasks.visibility = View.VISIBLE
             tasksContainer.visibility = View.GONE
+            isTasksFirstLoad = false
+            return
+        }
+        
+        isTasksFirstLoad = false
+        
+        if (skeletonTasks.visibility == View.VISIBLE) {
+            tasksContainer.alpha = 0f
+            tasksContainer.visibility = View.VISIBLE
+            tasksContainer.animate()
+                .alpha(1f)
+                .setDuration(300)
+                .withEndAction { skeletonTasks.visibility = View.GONE }
+                .start()
         } else {
-            // Плавное появление контента
-            if (skeletonTasks.visibility == View.VISIBLE) {
-                tasksContainer.alpha = 0f
-                tasksContainer.visibility = View.VISIBLE
-                tasksContainer.animate()
-                    .alpha(1f)
-                    .setDuration(300)
-                    .withEndAction { skeletonTasks.visibility = View.GONE }
-                    .start()
-            } else {
-                tasksContainer.visibility = View.VISIBLE
-            }
+            tasksContainer.visibility = View.VISIBLE
         }
 
         tasksContainer.removeAllViews()
@@ -293,24 +295,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshHistory(records: List<HistoryRecord>) {
-        // Skeleton показываем только при первой загрузке
-        if (records.isEmpty() && historyVM.records.value == null) {
+        if (records.isEmpty() && isHistoryFirstLoad) {
             skeletonHistory.visibility = View.VISIBLE
             historyContainer.visibility = View.GONE
             tvHistoryEmpty.visibility = View.GONE
+            isHistoryFirstLoad = false
+            return
+        }
+        
+        isHistoryFirstLoad = false
+        
+        // Плавное появление контента
+        if (skeletonHistory.visibility == View.VISIBLE) {
+            historyContainer.alpha = 0f
+            historyContainer.visibility = View.VISIBLE
+            historyContainer.animate()
+                .alpha(1f)
+                .setDuration(300)
+                .withEndAction { skeletonHistory.visibility = View.GONE }
+                .start()
         } else {
-            // Плавное появление контента
-            if (skeletonHistory.visibility == View.VISIBLE) {
-                historyContainer.alpha = 0f
-                historyContainer.visibility = View.VISIBLE
-                historyContainer.animate()
-                    .alpha(1f)
-                    .setDuration(300)
-                    .withEndAction { skeletonHistory.visibility = View.GONE }
-                    .start()
-            } else {
-                historyContainer.visibility = View.VISIBLE
-            }
+            historyContainer.visibility = View.VISIBLE
         }
 
         historyContainer.removeAllViews()
@@ -621,7 +626,6 @@ class MainActivity : AppCompatActivity() {
                 tabTasks.visibility = View.VISIBLE
                 btnTabTasks.setBackgroundResource(R.drawable.bg_button_primary)
                 btnTabTasks.setTextColor(0xFF000000.toInt())
-                tasksVM.refreshTasks()
             }
             3 -> {
                 tabHistory.visibility = View.VISIBLE

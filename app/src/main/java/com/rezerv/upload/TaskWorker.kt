@@ -13,7 +13,9 @@ import androidx.work.WorkerParameters
 import com.rezerv.upload.data.TaskRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @HiltWorker
@@ -28,16 +30,20 @@ class TaskWorker @AssistedInject constructor(
         private const val MAX_RETRY = 3
     }
 
+    // ✅ Throttler для Notification (не чаще раза в 500мс)
+    private var lastNotificationUpdate = 0L
+    private val notificationLock = Any()
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             val taskId = inputData.getString("taskId")
             Log.d(TAG, "▶ doWork: taskId=$taskId, попытка=$runAttemptCount")
 
             val tasksToRun = if (!taskId.isNullOrBlank()) {
-                val t = repository.getTaskById(taskId) // ✅ Используем repository
+                val t = repository.getTaskById(taskId)
                 if (t != null && t.scheduleEnabled) listOf(t) else emptyList()
             } else {
-                repository.getActiveTasks() // ✅ Используем repository
+                repository.getActiveTasks()
             }
 
             if (tasksToRun.isEmpty()) return@withContext Result.success()
@@ -56,19 +62,34 @@ class TaskWorker @AssistedInject constructor(
                         continue
                     }
 
-                    // ИСПРАВЛЕНО: runTask теперь suspend
+                    // ✅ Foreground Service: показываем уведомление перед началом
+                    setForeground(NotificationHelper.createForegroundInfo(
+                        applicationContext, task.name, task.id, 0, "Подготовка...", true  // ✅ Добавили task.id
+                    ))
+
                     val result = SyncEngine.runTask(
                         applicationContext, task,
                         trigger = "schedule",
                         startTime = taskStartTime,
-                        onProgress = { Log.d(TAG, "  $it") },
+                        onProgress = { message ->
+                            Log.d(TAG, "  $message")
+                            // ✅ Оборачиваем в launch для вызова suspend функции
+                            launch {
+                                throttledUpdate(task.id, task.name, 0, message, isIndeterminate = true)
+                            }
+                        },
                         onLiveUpdate = { name, idx, total ->
                             HistoryManager.updateLiveRecord(applicationContext, taskStartTime, name, idx, total)
+                            val progress = if (total > 0) (idx * 100 / total) else 0
+                            // ✅ Оборачиваем в launch для вызова suspend функции
+                            launch {
+                                throttledUpdate(task.id, task.name, progress, name, isIndeterminate = false)
+                            }
                         }
                     )
 
                     val status = if (result.errors == 0) "ok" else "error"
-                    repository.saveTask(task.copy( // ✅ Используем repository
+                    repository.saveTask(task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = status))
                     totalErrors += result.errors
 
@@ -80,7 +101,6 @@ class TaskWorker @AssistedInject constructor(
                 } catch (e: Exception) {
                     Log.e(TAG, "'${task.name}' упало", e)
                     totalErrors++
-                    // ✅ ИСПРАВЛЕНО: было TaskManager.upsert, стало repository.saveTask
                     repository.saveTask(task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = "error"))
                     if (task.notifyOnError)
@@ -94,6 +114,36 @@ class TaskWorker @AssistedInject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Критическая ошибка", e)
             Result.failure()
+        }
+    }
+
+    private suspend fun throttledUpdate(
+        taskId: String,
+        taskName: String,
+        progress: Int,
+        text: String?,
+        isIndeterminate: Boolean
+    ) {
+        // ✅ ШАГ 1: Внутри synchronized только проверяем условие
+        val shouldUpdate = synchronized(notificationLock) {
+            val now = System.currentTimeMillis()
+            if (now - lastNotificationUpdate >= 500L) {
+                lastNotificationUpdate = now
+                true  // Нужно обновить
+            } else {
+                false // Слишком рано, пропускаем
+            }
+        }
+        
+        // ✅ ШАГ 2: Suspend вызов ВЫНЕСЕН за пределы synchronized
+        if (shouldUpdate) {
+            try {
+                setForeground(NotificationHelper.createForegroundInfo(
+                    applicationContext, taskName, taskId, progress, text, isIndeterminate
+                ))
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update notification", e)
+            }
         }
     }
 

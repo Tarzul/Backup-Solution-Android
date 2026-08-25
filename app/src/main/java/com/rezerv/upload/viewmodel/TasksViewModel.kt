@@ -50,7 +50,7 @@ class TasksViewModel @Inject constructor(
     fun deleteTask(task: SyncTask) {
         viewModelScope.launch(Dispatchers.IO) {
             syncScheduler.cancelForTask(getApplication(), task)
-            taskRepo.deleteTask(task.id) // ✅ Без context
+            taskRepo.deleteTask(task.id)
             syncScheduler.scheduleNext(getApplication())
         }
     }
@@ -98,7 +98,7 @@ class TasksViewModel @Inject constructor(
                 lastStatus = if (result.errors == 0) "ok" else "error"
             )
             withContext(Dispatchers.IO) {
-                taskRepo.saveTask(updated) // ✅ Без context
+                taskRepo.saveTask(updated)
             }
             syncScheduler.scheduleNext(getApplication())
 

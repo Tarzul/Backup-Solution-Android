@@ -10,6 +10,14 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import okio.buffer
+import okio.sink
+import okio.source
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.isActive
 
 object WebDavClient {
     private const val TAG = "WebDavClient"
@@ -145,22 +153,35 @@ object WebDavClient {
     }
 
     /** PUT — загружает InputStream, возвращает HTTP-код. */
-    suspend fun put(url: String, user: String, pass: String, inputStream: InputStream): Int {
-        val requestBody = object : RequestBody() {
+    suspend fun put(
+        url: String, user: String, pass: String, 
+        inputStream: InputStream, 
+        fileSize: Long = -1L,
+        onProgress: (Long, Long) -> Unit = { _, _ -> }
+    ): Int {
+        // 1. Базовый RequestBody, который читает InputStream стримом
+        val delegateBody = object : RequestBody() {
             override fun contentType() = "application/octet-stream".toMediaType()
-            override fun isOneShot() = true  // OkHttp не будет буферизовать
-            override fun writeTo(sink: okio.BufferedSink) {
-                val buffer = ByteArray(64 * 1024)
-                var bytesRead: Int
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    sink.write(buffer, 0, bytesRead)
+            override fun contentLength() = fileSize
+            override fun isOneShot() = true
+            override fun writeTo(sink: BufferedSink) {
+                inputStream.source().use { source ->
+                    val buffer = Buffer()
+                    while (true) {
+                        val read = source.read(buffer, 8192)
+                        if (read == -1L) break
+                        sink.write(buffer, read)
+                    }
                 }
             }
         }
 
+        // 2. Оборачиваем в ProgressRequestBody для трекинга
+        val progressBody = ProgressRequestBody(delegateBody, onProgress)
+
         val request = Request.Builder()
             .url(url)
-            .put(requestBody)
+            .put(progressBody)
             .withAuth(user, pass)
             .build()
 
@@ -169,6 +190,53 @@ object WebDavClient {
             response.code
         }
     }
+
+    suspend fun downloadStreaming(
+        url: String, user: String, pass: String,
+        outputStream: java.io.OutputStream,
+        onProgress: (Long, Long) -> Unit = { _, _ -> }
+    ): Result<Long> {
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .withAuth(user, pass)
+            .build()
+
+        return try {
+            executeAsync(request).use { response ->
+                if (!response.isSuccessful) {
+                    Result.failure(IOException("HTTP ${response.code}"))
+                } else {
+                    val body = response.body ?: return@use Result.failure(IOException("Empty body"))
+                    val contentLength = body.contentLength()
+                    var bytesCopied = 0L
+                
+                    val source = body.source()
+                    val sink = outputStream.sink().buffer()
+                    val buffer = Buffer()
+
+                    while (true) {
+                        // МГНОВЕННАЯ ПРОВЕРКА ОТМЕНЫ: 
+                        // Если пользователь нажал "Стоп", цикл прервется на следующем чанке (8 КБ)
+                        if (!coroutineContext.isActive) {
+                            throw kotlinx.coroutines.CancellationException("Download cancelled")
+                        }
+                    
+                        val read = source.read(buffer, 8192)
+                        if (read == -1L) break
+                    
+                        sink.write(buffer, read)
+                        bytesCopied += read
+                        onProgress(bytesCopied, contentLength)
+                    }
+                    sink.flush()
+                    Result.success(bytesCopied)
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }    
 
     suspend fun delete(url: String, user: String, pass: String): Int {
         val request = Request.Builder()
@@ -213,5 +281,32 @@ object WebDavClient {
         }
 
         return executeAsync(requestBuilder.build())
+    }
+
+    // Внутри object WebDavClient
+    private class ProgressRequestBody(
+        private val delegate: RequestBody,
+        private val onProgress: (Long, Long) -> Unit
+    ) : RequestBody() {
+        override fun contentType() = delegate.contentType()
+        override fun contentLength() = delegate.contentLength()
+        override fun isOneShot() = true // Критично для InputStream!
+
+        override fun writeTo(sink: BufferedSink) {
+            val contentLength = contentLength()
+            var bytesWritten = 0L
+
+            val forwardingSink = object : ForwardingSink(sink) {
+                override fun write(source: Buffer, byteCount: Long) {
+                    super.write(source, byteCount)
+                    bytesWritten += byteCount
+                    onProgress(bytesWritten, contentLength)
+                }
+            }
+
+            val buffered = forwardingSink.buffer()
+            delegate.writeTo(buffered)
+            buffered.flush()
+        }
     }
 }

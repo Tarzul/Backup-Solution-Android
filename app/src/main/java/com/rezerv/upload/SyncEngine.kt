@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.*
+import com.rezerv.upload.utils.ProgressThrottler
 
 object SyncEngine {
     private const val TAG = "SyncEngine"
@@ -53,10 +54,58 @@ object SyncEngine {
         val server = WebDavRepository.normalizeBaseUrl(serverRaw) ?: ""
         val res = SideResult()
 
+        // ==================== SETUP PHASE: Блокировки ====================
+        
+        // 1. WakeLock (CPU не спит)
         val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-        val wl = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "rezerv:sync")
-        wl.acquire(4 * 60 * 60 * 1000L)
+        val wakeLock = pm.newWakeLock(
+            android.os.PowerManager.PARTIAL_WAKE_LOCK, 
+            "RezervApp:SyncWakeLock"
+        )
+        wakeLock.acquire(4 * 60 * 60 * 1000L)
 
+        // 2. WifiLock (Wi-Fi не отключается)
+        var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+        try {
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            if (wifiManager != null && wifiManager.isWifiEnabled) {
+                wifiLock = wifiManager.createWifiLock(
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, 
+                    "RezervApp:WifiLock"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+                Log.d(TAG, "✅ WifiLock acquired")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Не удалось получить WifiLock", e)
+        }
+
+        // 3. NetworkRequest (Привязка процесса к активной сети)
+        var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val request = android.net.NetworkRequest.Builder()
+                .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+                .build()
+
+            networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    Log.d(TAG, "✅ Network bound for sync")
+                    connectivityManager.bindProcessToNetwork(network)
+                }
+                override fun onLost(network: android.net.Network) {
+                    Log.w(TAG, "⚠️ Network lost during sync")
+                }
+            }
+            connectivityManager.requestNetwork(request, networkCallback)
+        }
+
+        // ==================== MAIN LOGIC ====================
         try {
             progress("▶ Задание: ${task.name}")
 
@@ -122,7 +171,34 @@ object SyncEngine {
             ))
 
         } finally {
-            if (wl.isHeld) wl.release()
+            // ==================== CLEANUP PHASE: Освобождение блокировок ====================
+            
+            // 1. Освобождаем NetworkRequest (отвязываем процесс)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                networkCallback?.let { callback ->
+                    try {
+                        connectivityManager.unregisterNetworkCallback(callback)
+                        connectivityManager.bindProcessToNetwork(null)
+                        Log.d(TAG, "NetworkCallback unregistered")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to unregister NetworkCallback", e)
+                    }
+                }
+            }
+            
+            // 2. Освобождаем WifiLock
+            wifiLock?.let { lock ->
+                if (lock.isHeld) {
+                    lock.release()
+                    Log.d(TAG, "WifiLock released")
+                }
+            }
+            
+            // 3. Освобождаем WakeLock
+            if (wakeLock.isHeld) {
+                wakeLock.release()
+                Log.d(TAG, "WakeLock released")
+            }
         }
 
         SyncResult(res.checked, res.uploaded, res.downloaded, res.errors, res.durationMs)
@@ -173,6 +249,7 @@ object SyncEngine {
 
             progress("   ⬆ $name")
             val t0 = System.currentTimeMillis()
+            
             try {
                 val input = context.contentResolver.openInputStream(f.uri)
                 if (input == null) {
@@ -181,11 +258,22 @@ object SyncEngine {
                     res.errorList.add(SyncErrorDetail(name, "не удалось открыть"))
                 } else {
                     input.use {
-                        // ИСПРАВЛЕНО: suspend-вызов
+                        // ✅ ИСПРАВЛЕНО: Используем ProgressThrottler
+                        val throttledProgress = ProgressThrottler { written, total ->
+                            live(name, written, total)
+                        }
+
                         val code = WebDavClient.put(
-                            server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name),
-                            user, pass, it
+                            url = server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name),
+                            user = user, 
+                            pass = pass,
+                            inputStream = it,
+                            fileSize = f.length(),
+                            onProgress = { written, total ->
+                                throttledProgress.emit(written, total)
+                            }
                         )
+
                         if (code in 200..299) {
                             res.uploaded++
                             res.bytes += f.length()
@@ -199,6 +287,9 @@ object SyncEngine {
                         }
                     }
                 }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                // ✅ КРИТИЧНО: Пробрасываем CancellationException для корректной отмены
+                throw ce
             } catch (e: Exception) {
                 progress("   ✗ $name: ${e.message}")
                 res.errors++
@@ -253,46 +344,63 @@ object SyncEngine {
             progress("   ⬇ ${e.name}")
             val t0 = System.currentTimeMillis()
 
-            var resp: okhttp3.Response? = null
             try {
-                // ИСПРАВЛЕНО: suspend-вызов
-                resp = WebDavClient.get(server + WebDavRepository.encodePath(remote), user, pass)
-                if (resp.code in 200..299) {
-                    val target = existing ?: dir.createFile(getMimeType(e.name), e.name)
-                    if (target == null) {
-                        progress("   ✗ ${e.name}: не удалось создать файл")
-                        res.errors++
-                        res.errorList.add(SyncErrorDetail(e.name, "не удалось создать файл"))
-                    } else {
-                        var size = 0L
-                        context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
-                            resp.body?.byteStream()?.use { input ->
-                                val buf = ByteArray(64 * 1024)
-                                var r: Int
-                                while (input.read(buf).also { r = it } != -1) {
-                                    out.write(buf, 0, r)
-                                    size += r
-                                }
-                            }
+                val target = existing ?: dir.createFile(getMimeType(e.name), e.name)
+                if (target == null) {
+                    progress("   ✗ ${e.name}: не удалось создать файл")
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail(e.name, "не удалось создать файл"))
+                    continue
+                }
+
+                var size = 0L
+                
+                // ✅ ИСПРАВЛЕНО: Используем ProgressThrottler вместо ThrottledProgress
+                val throttledProgress = ProgressThrottler { written, total ->
+                    live(e.name, written, total)
+                }
+
+                val downloadResult = context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
+                    WebDavClient.downloadStreaming(
+                        url = server + WebDavRepository.encodePath(remote),
+                        user = user,
+                        pass = pass,
+                        outputStream = out,
+                        onProgress = { written, total ->
+                            // ✅ ИСПРАВЛЕНО: Используем .emit() вместо .update()
+                            throttledProgress.emit(written, total)
                         }
+                    )
+                } ?: Result.failure(java.io.IOException("Не удалось открыть OutputStream"))
+
+                downloadResult.fold(
+                    onSuccess = { bytesCopied ->
+                        size = bytesCopied
                         res.downloaded++
                         res.bytes += size
                         res.files.add(SyncFileDetail(e.name, size, System.currentTimeMillis() - t0, side))
                         progress("   ✓ ${e.name}")
+                    },
+                    onFailure = { exception ->
+                        if (exception is kotlinx.coroutines.CancellationException) {
+                            target.delete()
+                            throw exception 
+                        }
+                        progress("   ✗ ${e.name}: ${exception.message}")
+                        res.errors++
+                        res.errorList.add(SyncErrorDetail(e.name, exception.message ?: "исключение"))
+                        Log.e(TAG, "Download error: ${e.name}", exception)
+                        target.delete()
                     }
-                } else {
-                    val reason = httpErrorReason(resp.code)
-                    progress("   ✗ ${e.name}: $reason")
-                    res.errors++
-                    res.errorList.add(SyncErrorDetail(e.name, reason))
-                }
+                )
+
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
             } catch (e2: Exception) {
                 progress("   ✗ ${e.name}: ${e2.message}")
                 res.errors++
                 res.errorList.add(SyncErrorDetail(e.name, e2.message ?: "исключение"))
                 Log.e(TAG, "Download error: ${e.name}", e2)
-            } finally {
-                try { resp?.close() } catch (_: Exception) {}
             }
             res.transferMs += System.currentTimeMillis() - t0
         }

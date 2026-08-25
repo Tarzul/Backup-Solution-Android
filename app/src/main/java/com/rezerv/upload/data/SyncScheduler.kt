@@ -4,8 +4,8 @@ import android.content.Context
 import com.rezerv.upload.SyncTask
 
 interface SyncScheduler {
-    fun scheduleNext(context: Context)
-    fun ensureScheduler(context: Context)
+    suspend fun scheduleNext(context: Context)      // ✅ suspend
+    suspend fun ensureScheduler(context: Context)   // ✅ suspend
     fun cancelForTask(context: Context, task: SyncTask)
-    fun cancelAll(context: Context)
+    suspend fun cancelAll(context: Context)         // ✅ suspend
 }

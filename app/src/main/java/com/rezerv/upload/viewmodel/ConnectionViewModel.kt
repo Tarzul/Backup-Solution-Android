@@ -63,7 +63,7 @@ class ConnectionViewModel @Inject constructor(
     }
 
     fun ensureScheduler() {
-        syncScheduler.scheduleNext(getApplication())
+        viewModelScope.launch { syncScheduler.ensureScheduler(getApplication()) }
     }
 
     // ==================== Подключение ====================

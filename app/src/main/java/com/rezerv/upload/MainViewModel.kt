@@ -9,6 +9,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import com.rezerv.upload.data.SyncScheduler
+import com.rezerv.upload.data.TaskRepository
+import dagger.hilt.android.AndroidEntryPoint
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -18,8 +22,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+@HiltViewModel
+class MainViewModel @Inject constructor(
+    application: Application,
+    private val taskRepository: TaskRepository,   // ✅ Room
+    private val syncScheduler: SyncScheduler      // ✅ Планировщик
+) : AndroidViewModel(application) {
 
     companion object {
         private const val MAX_IMAGES_IN_PAGER = 500
@@ -52,14 +62,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var rangeBase: Set<Int> = emptySet()
     private var rangeModeAdd = true
     
-    // ✅ Оптимизация 3: Ограниченный список изображений
     var pagerImages: List<WebDavRepository.FileInfo> = emptyList()
         private set
     
-    // ✅ Оптимизация 1: Семафор для параллельных загрузок
     private val uploadSemaphore = Semaphore(MAX_PARALLEL_UPLOADS)
-    
-    // ✅ Оптимизация 4: Кольцевой буфер для логов
     private val logBuffer = CircularLogBuffer(maxLines = 200, maxChars = 20000)
 
     // ==================== Настройки (SecurePrefs) ====================
@@ -77,7 +83,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun ensureScheduler() {
-        AlarmScheduler.scheduleNext(getApplication())
+        viewModelScope.launch { syncScheduler.ensureScheduler(getApplication()) }  // ✅
     }
 
     // ==================== Подключение и навигация ====================
@@ -210,7 +216,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun getImageList(): List<WebDavRepository.FileInfo> =
         _uiState.value?.files?.filter { !it.isDirectory && FileUtils.isImageFile(it.name) } ?: emptyList()
 
-    // ✅ Оптимизация 3: Ограничение размера списка изображений
     fun setPagerImages(images: List<WebDavRepository.FileInfo>) {
         pagerImages = if (images.size > MAX_IMAGES_IN_PAGER) {
             images.take(MAX_IMAGES_IN_PAGER)
@@ -256,7 +261,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // ✅ Параллельная загрузка через async + semaphore
             val deferredResults = uris.mapIndexed { index, uri ->
                 async(Dispatchers.IO) {
                     uploadSemaphore.withPermit {
@@ -297,7 +301,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Ждём завершения всех загрузок
             val results = deferredResults.awaitAll()
 
             val fileDetails = mutableListOf<SyncFileDetail>()
@@ -493,7 +496,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ==================== Задания и история ====================
     fun refreshTasks() {
         viewModelScope.launch(Dispatchers.IO) {
-            _tasks.postValue(TaskManager.load(getApplication()))
+            _tasks.postValue(taskRepository.getActiveTasks())  // ✅ Room
         }
     }
 
@@ -546,10 +549,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastRun = System.currentTimeMillis(),
                 lastStatus = if (result.errors == 0) "ok" else "error"
             )
-            withContext(Dispatchers.IO) {
-                TaskManager.upsert(getApplication(), updated)
-            }
-            AlarmScheduler.scheduleNext(getApplication())
+            withContext(Dispatchers.IO) { taskRepository.saveTask(updated) }  // ✅ Room
+            syncScheduler.scheduleNext(getApplication())                      // ✅
             refreshTasks()
             refreshHistory()
         }
@@ -557,21 +558,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteTask(t: SyncTask) {
         viewModelScope.launch(Dispatchers.IO) {
-            TaskManager.delete(getApplication(), t.id)
-            AlarmScheduler.scheduleNext(getApplication())
-            _tasks.postValue(TaskManager.load(getApplication()))
+            syncScheduler.cancelForTask(getApplication(), t)   // ✅
+            taskRepository.deleteTask(t.id)                     // ✅ Room
+            syncScheduler.scheduleNext(getApplication())        // ✅
+            _tasks.postValue(taskRepository.getActiveTasks())   // ✅ Room
         }
     }
 
     fun log(message: String) { appendLog(message) }
 
-    // ✅ Оптимизация 4: Кольцевой буфер для логов
     private fun appendLog(message: String) {
         logBuffer.add(message)
         _uiState.postValue(_uiState.value?.copy(log = logBuffer.getText()) ?: UiState(log = logBuffer.getText()))
     }
 
-    // ✅ Оптимизация 3: Очистка памяти при уничтожении ViewModel
     override fun onCleared() {
         super.onCleared()
         pagerImages = emptyList()

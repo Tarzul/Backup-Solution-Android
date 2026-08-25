@@ -4,24 +4,30 @@ import android.content.Context
 import com.rezerv.upload.AlarmScheduler
 import com.rezerv.upload.SyncTask
 import com.rezerv.upload.data.SyncScheduler
+import com.rezerv.upload.data.TaskRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Реализация SyncScheduler через существующий object AlarmScheduler.
- */
 @Singleton
-class AlarmSchedulerImpl @Inject constructor() : SyncScheduler {
+class AlarmSchedulerImpl @Inject constructor(
+    private val taskRepository: TaskRepository   // ✅ инжектим репозиторий
+) : SyncScheduler {
 
-    override fun scheduleNext(context: Context) =
-        AlarmScheduler.scheduleNext(context)
+    override suspend fun scheduleNext(context: Context) {
+        val tasks = withContext(Dispatchers.IO) { taskRepository.getActiveTasks() }
+        AlarmScheduler.scheduleNext(context, tasks)
+    }
 
-    override fun ensureScheduler(context: Context) =
-        AlarmScheduler.ensureScheduler(context)
+    override suspend fun ensureScheduler(context: Context) = scheduleNext(context)
 
     override fun cancelForTask(context: Context, task: SyncTask) =
         AlarmScheduler.cancelForTask(context, task)
 
-    override fun cancelAll(context: Context) =
-        AlarmScheduler.cancelAll(context)
+    override suspend fun cancelAll(context: Context) {
+        val tasks = withContext(Dispatchers.IO) { taskRepository.getAllTasks().first() }
+        AlarmScheduler.cancelAll(context, tasks)
+    }
 }

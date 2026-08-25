@@ -13,9 +13,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
 import com.rezerv.upload.utils.Validators
+import com.rezerv.upload.data.TaskRepository
+import com.rezerv.upload.data.SyncScheduler
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class TaskWizardActivity : AppCompatActivity() {
+    @Inject lateinit var taskRepository: TaskRepository   // ✅
+    @Inject lateinit var syncScheduler: SyncScheduler     // ✅
     private var editTaskId: String? = null
     private var editingTask: SyncTask? = null
     private var currentStep = 0
@@ -72,32 +77,40 @@ class TaskWizardActivity : AppCompatActivity() {
         editTaskId = intent.getStringExtra("taskId")
         startStep = intent.getIntExtra("startStep", 0)
         editSingleStep = intent.getBooleanExtra("singleStep", false)
-        if (!editTaskId.isNullOrBlank()) {
-            editingTask = TaskManager.getById(this, editTaskId!!)
-            editingTask?.let { restoreFromTask(it) }
-        }
-        editSingleStep = editSingleStep && editingTask != null
-        initViews(); setupStep1(); setupStep2(); setupStep3(); setupStep4(); setupStep5()
-        // НОВОЕ: сразу открываем нужный шаг
         editSection = intent.getStringExtra("section") ?: ""
-        if (editSingleStep) {
-            currentStep = startStep.coerceIn(0, 4)
-            flipper.displayedChild = currentStep
-            if (currentStep == 4) updateSummary()
-            // НОВОЕ: на шаге 3 показываем только нужную секцию
-            if (currentStep == 3) {
-                findViewById<LinearLayout>(R.id.llPlanSection).visibility =
-                    if (editSection == "sync") View.GONE else View.VISIBLE
-                findViewById<LinearLayout>(R.id.llSyncSection).visibility =
-                    if (editSection == "plan") View.GONE else View.VISIBLE
-                tvTitle.text = when (editSection) {
-                    "plan" -> "Планирование"
-                    "sync" -> "Дополнительно"
-                    else -> "Редактировать задание"
+
+        initViews(); setupStep1(); setupStep2(); setupStep3(); setupStep4(); setupStep5()
+        updateNavigation()
+
+        // ✅ Загружаем задание из Room асинхронно
+        if (!editTaskId.isNullOrBlank()) {
+            lifecycleScope.launch {
+                editingTask = withContext(Dispatchers.IO) { taskRepository.getTaskById(editTaskId!!) }
+                editingTask?.let { restoreFromTask(it) }
+                editSingleStep = editSingleStep && editingTask != null
+
+                tvTitle.text = if (editingTask != null) "Редактировать задание" else "Создать задание"
+                setupStep1(); setupStep2(); setupStep3(); setupStep4(); setupStep5()
+
+                if (editSingleStep) {
+                    currentStep = startStep.coerceIn(0, 4)
+                    flipper.displayedChild = currentStep
+                    if (currentStep == 4) updateSummary()
+                    if (currentStep == 3) {
+                        findViewById<LinearLayout>(R.id.llPlanSection).visibility =
+                            if (editSection == "sync") View.GONE else View.VISIBLE
+                        findViewById<LinearLayout>(R.id.llSyncSection).visibility =
+                            if (editSection == "plan") View.GONE else View.VISIBLE
+                        tvTitle.text = when (editSection) {
+                            "plan" -> "Планирование"
+                            "sync" -> "Дополнительно"
+                            else -> "Редактировать задание"
+                        }
+                    }
                 }
+                updateNavigation()
             }
         }
-        updateNavigation()
     }
 
     private fun restoreFromTask(t: SyncTask) {
@@ -403,7 +416,8 @@ class TaskWizardActivity : AppCompatActivity() {
     private fun saveAndFinish() {
         collectUiState()
         val task = SyncTask(
-            id = editingTask?.id ?: "", name = taskName, syncType = syncType,
+            id = editingTask?.id ?: java.util.UUID.randomUUID().toString(),  // ✅ UUID! Иначе все новые задачи будут с id="" и перезаписывать друг друга в Room
+            name = taskName, syncType = syncType,
             leftIsWebdav = leftIsWebdav, leftLocalUri = leftLocalUri, leftWebdavPath = leftWebdavPath,
             rightIsWebdav = rightIsWebdav, rightLocalUri = rightLocalUri, rightWebdavPath = rightWebdavPath,
             scheduleEnabled = scheduleEnabled, scheduleMode = scheduleMode, intervalValue = intervalValue,
@@ -414,10 +428,12 @@ class TaskWizardActivity : AppCompatActivity() {
             notifyOnSuccess = notifyOnSuccess, notifyOnError = notifyOnError,
             lastRun = editingTask?.lastRun ?: 0L, lastStatus = editingTask?.lastStatus ?: ""
         )
-        TaskManager.upsert(this, task)
-        AlarmScheduler.scheduleNext(this)
-        toast("Задание сохранено")
-        finish()
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { taskRepository.saveTask(task) }   // ✅ Room
+            syncScheduler.scheduleNext(this@TaskWizardActivity)             // ✅ будильники из Room
+            toast("Задание сохранено")
+            finish()
+        }
     }
 
     // ИСПРАВЛЕНО: навигация по папкам WebDAV с «.. (вверх)» и «Выбрать эту папку» (зам. 19)

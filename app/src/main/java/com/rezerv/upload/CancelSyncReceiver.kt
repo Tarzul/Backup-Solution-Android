@@ -5,12 +5,22 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.work.WorkManager
+import com.rezerv.upload.data.TaskRepository
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first   // ✅ Импорт для extension-функции
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * Receiver для отмены синхронизации через Notification Action.
  * Отменяет И текущую работу WorkManager, И следующий запланированный будильник.
  */
+@AndroidEntryPoint
 class CancelSyncReceiver : BroadcastReceiver() {
+    
+    @Inject lateinit var taskRepository: TaskRepository
     
     companion object {
         private const val TAG = "CancelSyncReceiver"
@@ -36,21 +46,29 @@ class CancelSyncReceiver : BroadcastReceiver() {
         }
         
         // 2. Отменяем следующий запланированный будильник AlarmManager
-        // Это предотвратит автоматический перезапуск задачи через scheduleNext
-        if (taskId != null) {
+        val pendingResult = goAsync()
+        
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Загружаем задачу из SharedPreferences через TaskManager
-                val task = TaskManager.getById(context, taskId)
-                if (task != null) {
-                    AlarmScheduler.cancelForTask(context, task)
-                    Log.d(TAG, "✓ AlarmManager: отменён будильник для '${task.name}'")
+                if (taskId != null) {
+                    val task = taskRepository.getTaskById(taskId)
+                    if (task != null) {
+                        AlarmScheduler.cancelForTask(context, task)
+                        Log.d(TAG, "✓ AlarmManager: отменён будильник для '${task.name}'")
+                    } else {
+                        Log.w(TAG, "⚠ Задача $taskId не найдена в Room")
+                    }
+                } else {
+                    // ✅ ПРАВИЛЬНЫЙ СИНТАКСИС: .first() вызывается НА Flow, а не как функция
+                    val allTasks = taskRepository.getAllTasks().first()
+                    AlarmScheduler.cancelAll(context, allTasks)
+                    Log.d(TAG, "✓ AlarmManager: отменены все будильники (${allTasks.size} задач)")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Ошибка отмены AlarmManager", e)
+            } finally {
+                pendingResult.finish()
             }
-        } else {
-            AlarmScheduler.cancelAll(context)
-            Log.d(TAG, "✓ AlarmManager: отменены все будильники")
         }
     }
 }

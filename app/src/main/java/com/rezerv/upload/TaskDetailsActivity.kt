@@ -12,13 +12,18 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.rezerv.upload.data.SyncScheduler
+import com.rezerv.upload.data.TaskRepository
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class TaskDetailsActivity : AppCompatActivity() {
+    @Inject lateinit var taskRepository: TaskRepository
+    @Inject lateinit var syncScheduler: SyncScheduler
 
     private var currentTask: SyncTask? = null
 
@@ -67,7 +72,7 @@ class TaskDetailsActivity : AppCompatActivity() {
     private fun loadTask() {
         val taskId = intent.getStringExtra("taskId") ?: return
         lifecycleScope.launch {
-            currentTask = withContext(Dispatchers.IO) { TaskManager.getById(this@TaskDetailsActivity, taskId) }
+            currentTask = withContext(Dispatchers.IO) { taskRepository.getTaskById(taskId) }
             if (currentTask == null) {
                 Toast.makeText(this@TaskDetailsActivity, "Задание не найдено", Toast.LENGTH_SHORT).show()
                 finish()
@@ -94,15 +99,12 @@ class TaskDetailsActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnDetCopy).setOnClickListener { copyTask() }
         findViewById<ImageButton>(R.id.btnDetDelete).setOnClickListener { confirmDelete() }
 
-        // Карандаш в шапке — полный мастер с начала
         findViewById<ImageButton>(R.id.btnDetEdit).setOnClickListener { openWizard(0, singleStep = false) }
 
-        // ВОССТАНОВЛЕНО: переключение панелей «Основные / Планирование / Дополнительно»
         chipMain.setOnClickListener { switchTab(0) }
         chipPlan.setOnClickListener { switchTab(1) }
         chipSync.setOnClickListener { switchTab(2) }
 
-        // Кнопки у пунктов — сразу нужный шаг + кнопка «Сохранить»
         findViewById<Button>(R.id.btnEditType).setOnClickListener { openWizard(0, singleStep = true) }
         findViewById<Button>(R.id.btnEditLeft).setOnClickListener { openWizard(1, singleStep = true) }
         findViewById<Button>(R.id.btnEditRight).setOnClickListener { openWizard(2, singleStep = true) }
@@ -163,8 +165,7 @@ class TaskDetailsActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val startTime = System.currentTimeMillis()
             
-            // НОВОЕ: создаём live-запись СРАЗУ при нажатии ▶ ЗАПУСК
-            HistoryManager.createLiveRecord(this@TaskDetailsActivity, startTime, t.name, "user")
+            HistoryManager.createLiveRecord(this@TaskDetailsActivity, startTime, t.name, "user", t.id)
             
             Toast.makeText(this@TaskDetailsActivity, "Запуск синхронизации...", Toast.LENGTH_SHORT).show()
             
@@ -173,7 +174,7 @@ class TaskDetailsActivity : AppCompatActivity() {
                     this@TaskDetailsActivity, 
                     t, 
                     trigger = "user",
-                    startTime = startTime,   // НОВОЕ
+                    startTime = startTime,
                     onProgress = { },
                     onLiveUpdate = { fileName, fileIndex, totalFiles ->
                         HistoryManager.updateLiveRecord(
@@ -185,16 +186,14 @@ class TaskDetailsActivity : AppCompatActivity() {
             val updated = t.copy(
                 lastRun = System.currentTimeMillis(),
                 lastStatus = if (result.errors == 0) "ok" else "error")
-            withContext(Dispatchers.IO) { TaskManager.upsert(this@TaskDetailsActivity, updated) }
+            withContext(Dispatchers.IO) { taskRepository.saveTask(updated) }
             currentTask = updated
-            AlarmScheduler.scheduleNext(this@TaskDetailsActivity)
+            syncScheduler.scheduleNext(this@TaskDetailsActivity)
             
-            // Показываем результат и возвращаемся в MainActivity (где видна история с live-прогрессом)
             Toast.makeText(this@TaskDetailsActivity,
                 if (result.errors == 0) "✓ Синхронизация завершена" else "✗ Завершено с ошибками: ${result.errors}",
                 Toast.LENGTH_SHORT).show()
             
-            // НОВОЕ: закрываем активность, чтобы пользователь увидел обновлённую историю
             finish()
         }
     }
@@ -204,7 +203,8 @@ class TaskDetailsActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val newTask = t.copy(id = java.util.UUID.randomUUID().toString(),
                 name = "${t.name} (копия)", lastRun = 0, lastStatus = "")
-            withContext(Dispatchers.IO) { TaskManager.upsert(this@TaskDetailsActivity, newTask) }
+            withContext(Dispatchers.IO) { taskRepository.saveTask(newTask) }
+            syncScheduler.scheduleNext(this@TaskDetailsActivity)
             Toast.makeText(this@TaskDetailsActivity, "Задание скопировано", Toast.LENGTH_SHORT).show()
             finish()
         }
@@ -217,16 +217,15 @@ class TaskDetailsActivity : AppCompatActivity() {
             .setMessage("Задание «${t.name}» будет удалено безвозвратно.")
             .setPositiveButton("Удалить") { _, _ ->
                 lifecycleScope.launch {
-                    // ИСПРАВЛЕНО: сначала отменяем будильник (пока задание ещё есть),
-                    // потом удаляем из хранилища, потом пересчитываем остальные
-                    AlarmScheduler.cancelForTask(this@TaskDetailsActivity, t)
-                    withContext(Dispatchers.IO) { TaskManager.delete(this@TaskDetailsActivity, t.id) }
-                    AlarmScheduler.scheduleNext(this@TaskDetailsActivity)
+                    syncScheduler.cancelForTask(this@TaskDetailsActivity, t)
+                    withContext(Dispatchers.IO) { taskRepository.deleteTask(t.id) }
+                    syncScheduler.scheduleNext(this@TaskDetailsActivity)
                     Toast.makeText(this@TaskDetailsActivity, "Задание удалено", Toast.LENGTH_SHORT).show()
                     finish()
                 }
             }
-            .setNegativeButton("Отмена", null).show()
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     private fun switchTab(tabIndex: Int) {

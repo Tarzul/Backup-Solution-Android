@@ -19,6 +19,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 
 @HiltViewModel
 class TasksViewModel @Inject constructor(
@@ -34,9 +36,9 @@ class TasksViewModel @Inject constructor(
         data class TaskCompleted(val taskName: String, val errors: Int) : TaskEvent()
     }
 
-    // ✅ Используем Flow из Room (автоматическое обновление UI)
-    val tasks = taskRepo.getAllTasks()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val tasks: StateFlow<List<SyncTask>?> = taskRepo.getAllTasks()
+        .map<List<SyncTask>, List<SyncTask>?> { it }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _events = MutableLiveData<TaskEvent>()
     val events: LiveData<TaskEvent> = _events
@@ -56,7 +58,7 @@ class TasksViewModel @Inject constructor(
     }
 
     fun ensureScheduler() {
-        syncScheduler.scheduleNext(getApplication())
+        viewModelScope.launch { syncScheduler.ensureScheduler(getApplication()) }  // ✅ suspend теперь
     }
 
     fun runTaskNow(task: SyncTask) {

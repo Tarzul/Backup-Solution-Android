@@ -34,7 +34,6 @@ import com.rezerv.upload.utils.Validators
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
-    private var isTasksFirstLoad = true
     private var isHistoryFirstLoad = true  
 
     // ✅ 4 ViewModel вместо одной
@@ -188,25 +187,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // TasksViewModel
-        lifecycleScope.launch {
-            tasksVM.tasks.collect { tasks -> refreshTasks(tasks) }
-        } 
-        tasksVM.log.observe(this) { log -> tvLog.text = log }
-        tasksVM.events.observe(this) { event ->
-            when (event) {
-                is TasksViewModel.TaskEvent.ShowToast ->
-                    Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
-                is TasksViewModel.TaskEvent.TaskStarted -> {
-                    historyVM.startLiveUpdates()
-                    switchToTab(3)
-                }
-                is TasksViewModel.TaskEvent.TaskCompleted -> {
-                    historyVM.stopLiveUpdates()
-                    historyVM.refreshHistory()
-                }
+    // TasksViewModel
+    lifecycleScope.launch {
+        tasksVM.tasks.collect { tasks ->
+            if (tasks == null) {
+                // ✅ Ещё грузится — показываем skeleton
+                skeletonTasks.visibility = View.VISIBLE
+                tasksContainer.visibility = View.GONE
+            } else {
+                refreshTasks(tasks)
             }
         }
+    }
 
         // HistoryViewModel
         historyVM.records.observe(this) { records -> refreshHistory(records) }
@@ -250,15 +242,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshTasks(tasks: List<SyncTask>) {
-        if (tasks.isEmpty() && isTasksFirstLoad) {
-            skeletonTasks.visibility = View.VISIBLE
-            tasksContainer.visibility = View.GONE
-            isTasksFirstLoad = false
-            return
-        }
-        
-        isTasksFirstLoad = false
-        
+        // Плавное появление контента после skeleton
         if (skeletonTasks.visibility == View.VISIBLE) {
             tasksContainer.alpha = 0f
             tasksContainer.visibility = View.VISIBLE

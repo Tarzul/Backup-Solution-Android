@@ -23,23 +23,22 @@ object AlarmScheduler {
 
     // ==================== Основное API ====================
 
-    /** Переназначает будильники для ВСЕХ активных заданий. */
-    fun scheduleNext(context: Context) {
+    fun scheduleNext(context: Context, tasks: List<SyncTask>) {   // ✅ задачи передаются параметром
         try {
-            val tasks = TaskManager.getActiveTasks(context)
-            if (tasks.isEmpty()) {
-                cancelAll(context)
+            val active = tasks.filter { it.scheduleEnabled }
+            if (active.isEmpty()) {
+                cancelAll(context, tasks)
                 return
             }
             val now = System.currentTimeMillis()
             var scheduled = 0
-            for (t in tasks) {
+            for (t in active) {
                 var next = nextRun(t, now)
                 if (next == Long.MAX_VALUE) {
                     cancelForTask(context, t)
                     continue
                 }
-                if (next <= now) next = now + 60_000L   // страховка
+                if (next <= now) next = now + 60_000L
                 setAlarm(context, t, next)
                 scheduled++
             }
@@ -49,12 +48,9 @@ object AlarmScheduler {
         }
     }
 
-    /** Вызывается при старте приложения / после загрузки системы. */
-    fun ensureScheduler(context: Context) {
-        scheduleNext(context)
-    }
+    fun ensureScheduler(context: Context, tasks: List<SyncTask>) = scheduleNext(context, tasks)
 
-    /** Отменяет будильник конкретного задания. */
+    /** Отменяет будильник конкретного задания. (БЕЗ ИЗМЕНЕНИЙ) */
     fun cancelForTask(context: Context, task: SyncTask) {
         try {
             val intent = Intent(context, SyncAlarmReceiver::class.java)
@@ -73,11 +69,10 @@ object AlarmScheduler {
     }
 
     /** Отменяет будильники всех заданий. */
-    fun cancelAll(context: Context) {
+    fun cancelAll(context: Context, tasks: List<SyncTask>) {   // ✅ задачи параметром
         try {
-            val all = TaskManager.load(context)
-            for (t in all) cancelForTask(context, t)
-            Log.d(TAG, "cancelAll: отменено ${all.size}")
+            for (t in tasks) cancelForTask(context, t)
+            Log.d(TAG, "cancelAll: отменено ${tasks.size}")
         } catch (e: Exception) {
             Log.e(TAG, "cancelAll ERROR", e)
         }

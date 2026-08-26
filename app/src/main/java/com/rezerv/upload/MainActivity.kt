@@ -187,11 +187,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    // TasksViewModel
+    // TasksViewModel — задачи (Room Flow)
     lifecycleScope.launch {
         tasksVM.tasks.collect { tasks ->
             if (tasks == null) {
-                // ✅ Ещё грузится — показываем skeleton
                 skeletonTasks.visibility = View.VISIBLE
                 tasksContainer.visibility = View.GONE
             } else {
@@ -200,9 +199,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-        // HistoryViewModel
-        historyVM.records.observe(this) { records -> refreshHistory(records) }
-    }   
+    // ✅ НОВОЕ: TasksViewModel — события запуска синхронизации
+    tasksVM.events.observe(this) { event ->
+        when (event) {
+            is TasksViewModel.TaskEvent.ShowToast -> {
+                Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
+            }
+            is TasksViewModel.TaskEvent.TaskStarted -> {
+                // ✅ Переключаемся на историю и запускаем live-тикер
+                switchToTab(3)
+                historyVM.startLiveUpdates()
+            }
+            is TasksViewModel.TaskEvent.TaskCompleted -> {
+                // Уже не используется — результат показывает Notification из TaskWorker
+            }
+        }
+    }
+
+    // HistoryViewModel — записи + автостоп тикера
+    historyVM.records.observe(this) { records ->
+        refreshHistory(records)
+        if (historyVM.isLiveUpdating.value == true &&
+            records.none { it.status == "running" }) {
+            historyVM.stopLiveUpdates()
+        }
+    }  
+}
 
     // ==================== UI Updates ====================
 

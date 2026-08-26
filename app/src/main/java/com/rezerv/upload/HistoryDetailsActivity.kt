@@ -126,7 +126,7 @@ class HistoryDetailsActivity : AppCompatActivity() {
                 })
             }
             r.errors > 0 -> llErrors.addView(TextView(this).apply {
-                text = "Зафиксировано ошибок: ${r.errors}, но детали не были сохранены (запуск до обновления)"
+                text = "Зафиксировано ${r.errors} ошибок, но детали не сохранены (синхронизация была прервана)"
                 setTextColor(Color.parseColor("#FFFFB74D"))
                 textSize = 13f
                 setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))

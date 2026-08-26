@@ -26,6 +26,7 @@ data class HistoryRecord(
     val currentFileIndex: Int = 0,
     val totalFiles: Int = 0,
     val liveStartedAt: Long = 0,
+    val liveLastUpdateAt: Long = 0,
     val errorsJson: String = ""
 )
 
@@ -38,17 +39,14 @@ object HistoryManager {
     private const val PREFS_NAME = "webdav_history_v2"
     private const val KEY = "records"
     private const val MAX = 50
-    private const val LIVE_TIMEOUT_MS = 30 * 60 * 1000L
+    private const val LIVE_TIMEOUT_MS = 60 * 60 * 1000L
 
-    // ЕДИНЫЙ лок для ВСЕХ операций записи
-    private val writeLock = Any()
+// ЕДИНЫЙ лок для ВСЕХ операций записи
+private val writeLock = Any()
+private val liveSessions = mutableSetOf<Long>()
 
     // ==================== Атомарные операции ====================
 
-    /**
-     * ИСПРАВЛЕНО: Полностью атомарная операция "проверка + добавление".
-     * Возвращает true если запись создана, false если задание уже выполняется.
-     */
     fun createLiveRecord(
         context: Context, time: Long, taskName: String, trigger: String, taskId: String = ""
     ): Boolean {
@@ -56,21 +54,14 @@ object HistoryManager {
             val prefs = getPrefs(context)
             val records = loadRecords(prefs).toMutableList()
 
-            // 1. Чистим "зависшие" running-записи
-            val now = System.currentTimeMillis()
-            var cleaned = false
-            for (i in records.indices) {
-                if (records[i].status == "running" && now - records[i].liveStartedAt > LIVE_TIMEOUT_MS) {
-                    records[i] = records[i].copy(status = "error")
-                    cleaned = true
-                }
-            }
+            // 1. ✅ Чистим "зависшие" running-записи (переиспользуем helper)
+            val cleaned = cleanupStaleRunning(records)
 
             // 2. Проверяем дубль (в том же synchronized-блоке!)
             if (taskId.isNotEmpty() &&
                 records.any { it.status == "running" && it.taskId == taskId }) {
                 if (cleaned) saveRecords(prefs, records)
-                return false  // ❌ Уже выполняется
+                return false
             }
 
             // 3. Добавляем (гарантированно нет дубля)
@@ -78,18 +69,18 @@ object HistoryManager {
                 time = time, durationMs = 0, checked = 0, uploaded = 0,
                 downloaded = 0, deleted = 0, errors = 0,
                 status = "running", trigger = trigger,
-                taskName = taskName, taskId = taskId, liveStartedAt = time
+                taskName = taskName, taskId = taskId,
+                liveStartedAt = time,
+                liveLastUpdateAt = time
             ))
+            
             if (records.size > MAX) records.removeAt(records.lastIndex)
             saveRecords(prefs, records)
-            return true  // ✅ Запись создана
+            liveSessions.add(time)   // ✅ Регистрируем сессию
+            return true
         }
     }
 
-    /**
-     * ИСПРАВЛЕНО: Обновление без создания дублей.
-     * Использует time как уникальный ключ.
-     */
     fun updateLiveRecord(
         context: Context, time: Long,
         currentFileName: String, currentFileIndex: Int, totalFiles: Int
@@ -103,16 +94,13 @@ object HistoryManager {
             records[idx] = records[idx].copy(
                 currentFileName = currentFileName,
                 currentFileIndex = currentFileIndex,
-                totalFiles = totalFiles
+                totalFiles = totalFiles,
+                liveLastUpdateAt = System.currentTimeMillis()   // ✅ ДОБАВЬ: запись жива
             )
             saveRecords(prefs, records)
         }
     }
 
-    /**
-     * ИСПРАВЛЕНО: Финализация с атомарной заменой.
-     * Ищет по time → taskId → taskName (в порядке приоритета).
-     */
     fun finalizeRecord(context: Context, finalRecord: HistoryRecord) {
         synchronized(writeLock) {
             val prefs = getPrefs(context)
@@ -133,6 +121,7 @@ object HistoryManager {
                 if (records.size > MAX) records.removeAt(records.lastIndex)
             }
             saveRecords(prefs, records)
+            liveSessions.remove(finalRecord.time)
         }
     }
 
@@ -148,7 +137,13 @@ object HistoryManager {
 
     fun getRecords(context: Context): List<HistoryRecord> {
         synchronized(writeLock) {
-            return loadRecords(getPrefs(context))
+            val prefs = getPrefs(context)
+            val records = loadRecords(prefs).toMutableList()
+            // ✅ Чистим зависшие live-записи при КАЖДОМ чтении истории
+            if (cleanupStaleRunning(records)) {
+                saveRecords(prefs, records)
+            }
+            return records
         }
     }
 
@@ -228,6 +223,7 @@ object HistoryManager {
                     currentFileIndex = obj.optInt("currentFileIndex", 0),
                     totalFiles = obj.optInt("totalFiles", 0),
                     liveStartedAt = obj.optLong("liveStartedAt", 0),
+                    liveLastUpdateAt = obj.optLong("liveLastUpdateAt", 0), 
                     errorsJson = obj.optString("errorsJson", "")
                 )
             }
@@ -254,6 +250,7 @@ object HistoryManager {
                 put("currentFileIndex", rec.currentFileIndex)
                 put("totalFiles", rec.totalFiles)
                 put("liveStartedAt", rec.liveStartedAt)
+                put("liveLastUpdateAt", rec.liveLastUpdateAt)
                 put("errorsJson", rec.errorsJson)
             })
         }
@@ -281,5 +278,34 @@ object HistoryManager {
                 taskName = p.getOrNull(13) ?: ""
             ) else null
         }
+    }
+
+    private fun cleanupStaleRunning(records: MutableList<HistoryRecord>): Boolean {
+        val now = System.currentTimeMillis()
+        var changed = false
+        for (i in records.indices) {
+            val r = records[i]
+            if (r.status != "running") continue
+
+            val lastActivity = maxOf(r.liveLastUpdateAt, r.liveStartedAt)
+            val staleByTimeout = now - lastActivity > LIVE_TIMEOUT_MS
+            val fresh = now - r.liveStartedAt < 15_000L
+            val orphaned = !fresh && r.time !in liveSessions
+
+            if (staleByTimeout || orphaned) {
+                val reason = if (r.currentFileName.isNotEmpty())
+                    "прервано на файле: ${r.currentFileName}"
+                else "процесс завершён во время синхронизации"
+
+                records[i] = r.copy(
+                    status = "error",
+                    durationMs = (lastActivity - r.liveStartedAt).coerceAtLeast(0),
+                    errors = r.errors.coerceAtLeast(1),
+                    errorsJson = """[{"n":"${r.currentFileName.ifEmpty { "Синхронизация" }}","r":"$reason"}]"""
+                )
+                changed = true
+            }
+        }
+        return changed
     }
 }

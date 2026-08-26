@@ -136,6 +136,12 @@
                 tools:node="remove" />
         </provider>
 
+        <!-- ✅ WorkManager FGS с типом dataSync (обязательно на Android 14+) -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
     </application>
 
 </manifest>

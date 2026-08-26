@@ -613,7 +613,7 @@ private var liveStartTs = 0L
         val crash = prefs.getString("last_crash", null) ?: return
         prefs.edit().remove("last_crash").commit()
         AlertDialog.Builder(this)
-            .setTitle("💥 Краш — пришлите скриншот")
+            .setTitle("💥 Краш")
             .setMessage(crash.take(4000))
             .setPositiveButton("OK", null)
             .show()

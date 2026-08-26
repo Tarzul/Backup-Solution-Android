@@ -34,7 +34,9 @@ import com.rezerv.upload.utils.Validators
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
-    private var isHistoryFirstLoad = true  
+private var isHistoryFirstLoad = true
+private var seenRunning = false
+private var liveStartTs = 0L
 
     // ✅ 4 ViewModel вместо одной
     private val connectionVM: ConnectionViewModel by viewModels()
@@ -130,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
         loadSettings()
         observeViewModels()
+        showCrashBoxIfAny()
         connectionVM.ensureScheduler()
         requestMediaPermissions()
         requestNotifications()
@@ -206,7 +209,8 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
             }
             is TasksViewModel.TaskEvent.TaskStarted -> {
-                // ✅ Переключаемся на историю и запускаем live-тикер
+                seenRunning = false
+                liveStartTs = System.currentTimeMillis()
                 switchToTab(3)
                 historyVM.startLiveUpdates()
             }
@@ -216,14 +220,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // HistoryViewModel — записи + автостоп тикера
+    // HistoryViewModel — записи + умный автостоп тикера
     historyVM.records.observe(this) { records ->
         refreshHistory(records)
-        if (historyVM.isLiveUpdating.value == true &&
-            records.none { it.status == "running" }) {
-            historyVM.stopLiveUpdates()
+        val running = records.any { it.status == "running" }
+        if (running) seenRunning = true
+
+        if (historyVM.isLiveUpdating.value == true) {
+            // ✅ Стоп ТОЛЬКО если: видели running и он исчез (завершился успешно или с ошибкой)
+            val finished = seenRunning && !running
+            // ✅ Или: Worker так и не стартовал за 15 секунд (ошибка запуска)
+            val timedOut = !seenRunning && System.currentTimeMillis() - liveStartTs > 15_000
+            if (finished || timedOut) {
+                historyVM.stopLiveUpdates()
+                seenRunning = false
+            }
         }
-    }  
+    } 
 }
 
     // ==================== UI Updates ====================
@@ -593,6 +606,17 @@ class MainActivity : AppCompatActivity() {
                 browserVM.log("Ошибка загрузки списка папок: ${e.message}")
             }
         }
+    }
+
+    private fun showCrashBoxIfAny() {
+        val prefs = getSharedPreferences("crash_box", MODE_PRIVATE)
+        val crash = prefs.getString("last_crash", null) ?: return
+        prefs.edit().remove("last_crash").commit()
+        AlertDialog.Builder(this)
+            .setTitle("💥 Краш — пришлите скриншот")
+            .setMessage(crash.take(4000))
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     // ==================== Tabs ====================

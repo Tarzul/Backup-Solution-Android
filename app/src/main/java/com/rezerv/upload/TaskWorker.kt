@@ -37,11 +37,11 @@ class TaskWorker @AssistedInject constructor(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             val taskId = inputData.getString("taskId")
-            Log.d(TAG, "▶ doWork: taskId=$taskId, попытка=$runAttemptCount")
+            val trigger = if (!taskId.isNullOrBlank()) "user" else "schedule"
+            Log.d(TAG, "▶ doWork: taskId=$taskId, trigger=$trigger, попытка=$runAttemptCount")
 
             val tasksToRun = if (!taskId.isNullOrBlank()) {
-                val t = repository.getTaskById(taskId)
-                if (t != null && t.scheduleEnabled) listOf(t) else emptyList()
+                listOfNotNull(repository.getTaskById(taskId))
             } else {
                 repository.getActiveTasks()
             }
@@ -57,7 +57,7 @@ class TaskWorker @AssistedInject constructor(
 
                 try {
                     val taskStartTime = System.currentTimeMillis()
-                    if (!HistoryManager.createLiveRecord(applicationContext, taskStartTime, task.name, "schedule", task.id)) {
+                    if (!HistoryManager.createLiveRecord(applicationContext, taskStartTime, task.name, trigger, task.id)) {
                         Log.w(TAG, "'${task.name}' уже выполняется — пропуск")
                         continue
                     }
@@ -69,7 +69,7 @@ class TaskWorker @AssistedInject constructor(
 
                     val result = SyncEngine.runTask(
                         applicationContext, task,
-                        trigger = "schedule",
+                        trigger = trigger,
                         startTime = taskStartTime,
                         onProgress = { message ->
                             Log.d(TAG, "  $message")
@@ -98,8 +98,9 @@ class TaskWorker @AssistedInject constructor(
                     if (result.errors > 0 && task.notifyOnError)
                         NotificationHelper.showResult(applicationContext, task.name, false, result.errors)
 
-                } catch (e: Exception) {
-                    Log.e(TAG, "'${task.name}' упало", e)
+                } catch (t: Throwable) {
+                    if (t is kotlinx.coroutines.CancellationException) throw t
+                    Log.e(TAG, "'${task.name}' упало", t)
                     totalErrors++
                     repository.saveTask(task.copy(
                         lastRun = System.currentTimeMillis(), lastStatus = "error"))
@@ -111,8 +112,9 @@ class TaskWorker @AssistedInject constructor(
             if (totalErrors > 0 && runAttemptCount < MAX_RETRY) Result.retry()
             else Result.success()
 
-        } catch (e: Exception) {
-            Log.e(TAG, "Критическая ошибка", e)
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            Log.e(TAG, "Критическая ошибка", t)
             Result.failure()
         }
     }

@@ -2,36 +2,29 @@ package com.rezerv.upload.viewmodel
 
 import android.app.Application
 import android.content.Context
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.rezerv.upload.CoilPrefetch
 import com.rezerv.upload.FileUtils
-import com.rezerv.upload.HistoryRecord
-import com.rezerv.upload.SecurePrefs
-import com.rezerv.upload.SyncFileDetail
 import com.rezerv.upload.WebDavClient
 import com.rezerv.upload.WebDavRepository
+import com.rezerv.upload.CircularLogBuffer
 import com.rezerv.upload.WebDavResult
-import com.rezerv.upload.data.HistoryRepository
 import com.rezerv.upload.data.SettingsRepository
 import com.rezerv.upload.data.WebDavService
+
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
-/**
- * ViewModel для вкладки "Браузер".
- */
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
     application: Application,
     private val webDavService: WebDavService,
-    private val historyRepo: HistoryRepository,
     private val settingsRepo: SettingsRepository
 ) : AndroidViewModel(application) {
 
@@ -59,6 +52,7 @@ class BrowserViewModel @Inject constructor(
     private val _events = MutableLiveData<BrowserEvent>()
     val events: LiveData<BrowserEvent> = _events
 
+    private val logBuffer = CircularLogBuffer()
     private val _log = MutableLiveData("")
     val log: LiveData<String> = _log
 
@@ -356,17 +350,8 @@ class BrowserViewModel @Inject constructor(
     fun log(message: String) = appendLog(message)
 
     private fun appendLog(message: String) {
-        val current = _log.value ?: ""
-        val newLog = current + message + "\n"
-        _log.postValue(if (newLog.length > 20000) newLog.takeLast(20000) else newLog)  // ✅ postValue
-    }
-
-    private fun filesToJson(list: List<SyncFileDetail>): String {
-        val arr = org.json.JSONArray()
-        for (f in list) arr.put(org.json.JSONObject().apply {
-            put("n", f.name); put("s", f.size); put("m", f.ms); put("d", f.side)
-        })
-        return arr.toString()
+        logBuffer.add(message)
+        _log.postValue(logBuffer.getText())
     }
 
     override fun onCleared() {

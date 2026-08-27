@@ -12,7 +12,6 @@ class CircularLogBuffer(
         buffer.addLast(line)
         currentLength += line.length + 1  // +1 для \n
         
-        // Удаляем старые строки при переполнении
         while (buffer.size > maxLines || currentLength > maxChars) {
             val removed = buffer.removeFirst()
             currentLength -= removed.length + 1

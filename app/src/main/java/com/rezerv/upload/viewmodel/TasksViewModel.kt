@@ -7,6 +7,7 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.rezerv.upload.SyncTask
 import com.rezerv.upload.TaskWorker
+import com.rezerv.upload.CircularLogBuffer
 import com.rezerv.upload.data.HistoryRepository
 import com.rezerv.upload.data.SyncScheduler
 import com.rezerv.upload.data.TaskRepository
@@ -40,6 +41,7 @@ class TasksViewModel @Inject constructor(
     private val _events = MutableLiveData<TaskEvent>()
     val events: LiveData<TaskEvent> = _events
 
+    private val logBuffer = CircularLogBuffer()
     private val _log = MutableLiveData("")
     val log: LiveData<String> = _log
 
@@ -77,8 +79,7 @@ class TasksViewModel @Inject constructor(
     fun log(message: String) = appendLog(message)
 
     private fun appendLog(message: String) {
-        val current = _log.value ?: ""
-        val newLog = current + message + "\n"
-        _log.postValue(if (newLog.length > 20000) newLog.takeLast(20000) else newLog)
+        logBuffer.add(message)
+        _log.postValue(logBuffer.getText())
     }
 }

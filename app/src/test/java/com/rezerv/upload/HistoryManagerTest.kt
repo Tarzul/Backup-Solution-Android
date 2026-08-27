@@ -11,10 +11,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * Регрессионные тесты self-healing логики истории.
- * Защищают от повторного появления багов, которые мы отловили в production.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class HistoryManagerTest {
@@ -31,8 +27,9 @@ class HistoryManagerTest {
         HistoryManager.clear(context)
     }
 
+    // createLiveRecord создаёт running-запись
     @Test
-    fun `createLiveRecord создаёт running-запись`() {
+    fun createLiveRecord_createsRunningRecord() {
         val t = nextTime()
         assertTrue(HistoryManager.createLiveRecord(context, t, "Тест", "user", "task-A"))
         val r = HistoryManager.getRecords(context).first()
@@ -41,23 +38,26 @@ class HistoryManagerTest {
         assertEquals("task-A", r.taskId)
     }
 
+    // дубль по taskId блокируется
     @Test
-    fun `дубль по taskId блокируется`() {
+    fun duplicateTaskId_isBlocked() {
         assertTrue(HistoryManager.createLiveRecord(context, nextTime(), "Тест", "user", "task-dup"))
         assertFalse(HistoryManager.createLiveRecord(context, nextTime(), "Тест", "user", "task-dup"))
         assertEquals(1, HistoryManager.getRecords(context).count { it.status == "running" })
     }
 
+    // живая запись не помечается как сирота
     @Test
-    fun `живая запись не помечается как сирота`() {
+    fun liveRecord_notMarkedAsOrphan() {
         val t = nextTime()
         HistoryManager.createLiveRecord(context, t, "Живая", "user", "task-live")
         val r = HistoryManager.getRecords(context).first { it.time == t }
         assertEquals("running", r.status)
     }
 
+    // осиротевшая запись помечается error с диагностикой
     @Test
-    fun `осиротевшая запись помечается error с диагностикой`() {
+    fun orphanRecord_markedAsErrorWithDiagnostics() {
         val t = nextTime()
         HistoryManager.addRecord(context, HistoryRecord(
             time = t, durationMs = 0, checked = 0, uploaded = 0, downloaded = 0,
@@ -70,8 +70,9 @@ class HistoryManagerTest {
         assertTrue(r.errorsJson.contains("процесс завершён"))
     }
 
+    // осиротевшая запись с файлом содержит имя файла в причине
     @Test
-    fun `осиротевшая запись с файлом содержит имя файла в причине`() {
+    fun orphanRecordWithFile_containsFileNameInReason() {
         val t = nextTime()
         HistoryManager.addRecord(context, HistoryRecord(
             time = t, durationMs = 0, checked = 1, uploaded = 0, downloaded = 0,
@@ -84,8 +85,9 @@ class HistoryManagerTest {
         assertTrue(r.errorsJson.contains("прервано на файле: video.mp4"))
     }
 
+    // finalizeRecord заменяет running на финальную
     @Test
-    fun `finalizeRecord заменяет running на финальную`() {
+    fun finalizeRecord_replacesRunningWithFinal() {
         val t = nextTime()
         HistoryManager.createLiveRecord(context, t, "Финал", "user", "task-fin")
         HistoryManager.finalizeRecord(context, HistoryRecord(
@@ -99,8 +101,9 @@ class HistoryManagerTest {
         assertEquals(2, r.uploaded)
     }
 
+    // лимит 50 записей соблюдается
     @Test
-    fun `лимит 50 записей соблюдается`() {
+    fun limit50Records_isEnforced() {
         repeat(55) {
             HistoryManager.addRecord(context, HistoryRecord(
                 time = nextTime(), durationMs = 1, checked = 0, uploaded = 0,
@@ -110,8 +113,9 @@ class HistoryManagerTest {
         assertEquals(50, HistoryManager.getRecords(context).size)
     }
 
+    // parseFiles корректно разбирает JSON
     @Test
-    fun `parseFiles корректно разбирает JSON`() {
+    fun parseFiles_correctlyParsesJson() {
         val files = HistoryManager.parseFiles("""[{"n":"a.jpg","s":1024,"m":500,"d":"Справа"}]""")
         assertEquals(1, files.size)
         assertEquals("a.jpg", files[0].name)

@@ -68,9 +68,13 @@ android {
         }
     }
     
-        testOptions {
+    testOptions {
         unitTests {
             includeAndroidResources = true
+            all {
+                systemProperty 'robolectric.offline', 'true'
+                systemProperty 'robolectric.dependency.dir', 'C:/robolectric-offline'
+            }
         }
     }
 
@@ -164,4 +168,5 @@ dependencies {
 
     // Для потоковой работы с файлами (Okio уже есть, но убедитесь)
     implementation("com.squareup.okio:okio:3.9.0")
+
 }

@@ -68,6 +68,12 @@ android {
         }
     }
     
+        testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+
 }
 
 kapt {
@@ -141,6 +147,10 @@ dependencies {
     androidTestImplementation 'androidx.work:work-testing:2.9.0'
     androidTestImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
     
+    // Robolectric: unit-тесты с реальным Android-API (SharedPreferences, JSON, Log)
+    testImplementation 'org.robolectric:robolectric:4.12.2'
+    testImplementation 'androidx.test:core:1.5.0'
+
     // Room Database
     def room_version = "2.6.1"
     implementation("androidx.room:room-runtime:$room_version")

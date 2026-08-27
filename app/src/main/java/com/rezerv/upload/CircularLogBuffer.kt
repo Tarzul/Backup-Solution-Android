@@ -1,9 +1,5 @@
 package com.rezerv.upload
 
-/**
- * Кольцевой буфер для логирования без переполнения памяти.
- * Автоматически удаляет старые записи при достижении лимита.
- */
 class CircularLogBuffer(
     private val maxLines: Int = 200,
     private val maxChars: Int = 20000

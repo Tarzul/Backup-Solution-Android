@@ -20,11 +20,7 @@ import com.rezerv.upload.data.SettingsRepository
 import com.rezerv.upload.data.WebDavService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
@@ -34,13 +30,12 @@ import javax.inject.Inject
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
     application: Application,
-    private val webDavService: WebDavService,       // ✅ Внедрение
-    private val historyRepo: HistoryRepository,     // ✅ Внедрение
-    private val settingsRepo: SettingsRepository    // ✅ Внедрение
+    private val webDavService: WebDavService,
+    private val historyRepo: HistoryRepository,
+    private val settingsRepo: SettingsRepository
 ) : AndroidViewModel(application) {
 
     companion object {
-        private const val MAX_PARALLEL_UPLOADS = 3
         private const val MAX_IMAGES_IN_PAGER = 500
     }
 
@@ -69,7 +64,6 @@ class BrowserViewModel @Inject constructor(
 
     private var rangeBase: Set<Int> = emptySet()
     private var rangeModeAdd = true
-    private val uploadSemaphore = Semaphore(MAX_PARALLEL_UPLOADS)
 
     var pagerImages: List<WebDavRepository.FileInfo> = emptyList()
         private set
@@ -327,116 +321,6 @@ class BrowserViewModel @Inject constructor(
         }
     }
 
-    // ==================== Загрузка файлов (параллельная) ====================
-
-    fun uploadFilesToPath(
-        server: String, user: String, pass: String,
-        uris: List<Uri>, targetPath: String
-    ) {
-        appendLog("=== Загрузка ${uris.size} файлов (параллельно: $MAX_PARALLEL_UPLOADS) ===")
-
-        if (uris.isEmpty()) {
-            _events.value = BrowserEvent.ShowToast("Нет файлов для загрузки")
-            return
-        }
-
-        viewModelScope.launch {
-            val base = WebDavRepository.normalizeBaseUrl(server)
-            if (base == null) {
-                appendLog("✗ Неверный адрес сервера")
-                _events.value = BrowserEvent.ShowToast("Ошибка: неверный адрес сервера")
-                return@launch
-            }
-
-            val total = uris.size
-            val startTime = System.currentTimeMillis()
-
-            historyRepo.createLiveRecord(getApplication(), startTime, "Ручная загрузка", "user")
-
-            val deferredResults = uris.mapIndexed { index, uri ->
-                async(Dispatchers.IO) {
-                    uploadSemaphore.withPermit {
-                        val meta = webDavService.getFileMetadata(getApplication(), uri)
-                        val remotePath = targetPath.trimEnd('/') + "/" + meta.name
-                        appendLog("[$index/$total] Загрузка: ${meta.name}")
-
-                        historyRepo.updateLiveRecord(getApplication(), startTime, meta.name, index + 1, total)
-
-                        val fileStart = System.currentTimeMillis()
-                        try {
-                            val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
-                            if (inputStream == null) {
-                                return@withPermit Triple(false, meta.name, 0L to 0L)
-                            }
-
-                            val code = inputStream.use { input ->
-                                WebDavClient.put(
-                                    base + WebDavRepository.encodePath(remotePath),
-                                    user, pass, input
-                                )
-                            }
-
-                            val fileMs = System.currentTimeMillis() - fileStart
-                            if (code in 200..299) {
-                                appendLog("✓ [$index/$total] ${meta.name}")
-                                Triple(true, meta.name, meta.size to fileMs)
-                            } else {
-                                appendLog("✗ [$index/$total] ${meta.name}: HTTP $code")
-                                Triple(false, meta.name, 0L to fileMs)
-                            }
-                        } catch (e: Exception) {
-                            appendLog("✗ [$index/$total] ${meta.name}: ${e.message}")
-                            Triple(false, meta.name, 0L to (System.currentTimeMillis() - fileStart))
-                        }
-                    }
-                }
-            }
-
-            val results = deferredResults.awaitAll()
-
-            val fileDetails = mutableListOf<SyncFileDetail>()
-            var success = 0
-            var failed = 0
-            var totalBytes = 0L
-            var totalTransferMs = 0L
-
-            results.forEach { (isSuccess, fileName, bytesAndMs) ->
-                val (bytes, ms) = bytesAndMs
-                if (isSuccess) {
-                    success++
-                    totalBytes += bytes
-                    totalTransferMs += ms
-                    fileDetails.add(SyncFileDetail(fileName, bytes, ms, "Пользователь"))
-                } else {
-                    failed++
-                }
-            }
-
-            val durationMs = System.currentTimeMillis() - startTime
-
-            historyRepo.finalizeRecord(getApplication(), HistoryRecord(
-                time = startTime,
-                durationMs = durationMs,
-                checked = total,
-                uploaded = success,
-                downloaded = 0,
-                deleted = 0,
-                errors = failed,
-                status = if (failed == 0) "ok" else "error",
-                trigger = "user",
-                bytesTransferred = totalBytes,
-                transferMs = totalTransferMs,
-                filesJson = filesToJson(fileDetails),
-                taskName = "Ручная загрузка",
-                totalFiles = total
-            ))
-
-            appendLog("✓ Завершено: $success / $total")
-            _events.value = BrowserEvent.UploadCompleted(success, total)
-            browseServer(server, _state.value?.currentPath ?: "/", user, pass)
-        }
-    }
-
     fun viewVideo(context: Context, item: WebDavRepository.FileInfo) {
         viewModelScope.launch {
             _events.value = BrowserEvent.ShowToast("Скачивание видео: ${item.name}")
@@ -474,7 +358,7 @@ class BrowserViewModel @Inject constructor(
     private fun appendLog(message: String) {
         val current = _log.value ?: ""
         val newLog = current + message + "\n"
-        _log.value = if (newLog.length > 20000) newLog.takeLast(20000) else newLog
+        _log.postValue(if (newLog.length > 20000) newLog.takeLast(20000) else newLog)  // ✅ postValue
     }
 
     private fun filesToJson(list: List<SyncFileDetail>): String {

@@ -513,7 +513,22 @@ private var liveStartTs = 0L
             if (server.isBlank()) { browserVM.log("Ошибка: сервер не подключён"); return@setOnClickListener }
             if (picked.isEmpty()) { browserVM.log("Нет выбранных файлов"); return@setOnClickListener }
             showServerFolderPicker(server, user, pass) { targetPath ->
-                browserVM.uploadFilesToPath(server, user, pass, picked, targetPath)
+                // ✅ Унифицировано: ручная загрузка идёт через WorkManager
+                val request = androidx.work.OneTimeWorkRequestBuilder<UploadWorker>()
+                    .setInputData(androidx.work.workDataOf(
+                        UploadWorker.KEY_URIS to picked.map { it.toString() }.toTypedArray(),
+                        UploadWorker.KEY_TARGET to targetPath
+                    ))
+                    .addTag("task_${UploadWorker.TASK_ID}")   // ✅ кнопка «Остановить» в уведомлении
+                    .build()
+                androidx.work.WorkManager.getInstance(this).enqueue(request)
+
+                picked = emptyList()
+                // ✅ Переключаемся на историю и запускаем live-тикер (как в заданиях)
+                seenRunning = false
+                liveStartTs = System.currentTimeMillis()
+                switchToTab(3)
+                historyVM.startLiveUpdates()
             }
         }
 

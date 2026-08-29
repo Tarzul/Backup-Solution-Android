@@ -1,0 +1,161 @@
+plugins {
+    id("com.android.application")
+    id("com.google.devtools.ksp")
+    id("com.google.dagger.hilt.android")
+}
+
+android {
+    namespace = "com.rezerv.upload"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.rezerv.upload"
+        minSdk = 24
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+
+        vectorDrawables.useSupportLibrary = true
+
+        // Конфигурация через BuildConfig
+        buildConfigField("int", "MAX_HISTORY_RECORDS", "50")
+        buildConfigField("int", "MAX_LOG_LENGTH", "20000")
+        buildConfigField("long", "SYNC_WAKELOCK_MS", "14400000L")
+        buildConfigField("int", "HTTP_CONNECT_TIMEOUT_SEC", "30")
+        buildConfigField("int", "HTTP_READ_TIMEOUT_MIN", "10")
+        buildConfigField("int", "HTTP_MAX_RETRIES", "3")
+
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
+    }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = false
+            isDebuggable = true
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            ndk {
+                debugSymbolLevel = "NONE"
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = true
+        viewBinding = false
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental", "true")
+    arg("room.generateKotlin", "true")
+}
+
+dependencies {
+    // ==================== AndroidX Core ====================
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
+
+    // ==================== Сеть ====================
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+
+    // ==================== Корутины ====================
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // ==================== Lifecycle (MVVM) ====================
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+
+    // ==================== Фоновые задачи ====================
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // ==================== Работа с файлами ====================
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // ==================== UI ====================
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.viewpager2:viewpager2:1.0.0")
+    implementation("androidx.activity:activity-ktx:1.8.2")
+    implementation("androidx.fragment:fragment-ktx:1.6.2")
+
+    // ==================== Безопасность ====================
+    implementation("androidx.security:security-crypto:1.0.0")
+
+    // Hilt 2.59 через KSP
+    implementation("com.google.dagger:hilt-android:2.59")
+    ksp("com.google.dagger:hilt-android-compiler:2.59")
+
+    // Hilt для WorkManager через KSP
+    implementation("androidx.hilt:hilt-work:1.2.0")
+    ksp("androidx.hilt:hilt-compiler:1.2.0")
+
+    // ==================== Изображения ====================
+    implementation("io.coil-kt:coil:2.6.0")
+
+    // ==================== Отладка ====================
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.13")
+
+    // ==================== Тесты ====================
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.mockito:mockito-core:5.8.0")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
+    testImplementation("androidx.arch.core:core-testing:2.2.0")
+    testImplementation("app.cash.turbine:turbine:1.0.0")
+
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.work:work-testing:2.9.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("androidx.test:core:1.5.0")
+
+    // Room Database (через KSP)
+    val roomVersion = "2.6.1"
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")
+
+    // DataStore
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Okio для потоковой работы с файлами
+    implementation("com.squareup.okio:okio:3.9.0")
+}

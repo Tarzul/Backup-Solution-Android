@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Backup-Solution-Android"
-include ':app'
+include(":app")

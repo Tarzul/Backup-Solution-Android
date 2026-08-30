@@ -1,3 +1,14 @@
+
+import java.util.Properties
+import java.io.FileInputStream
+
+// Загрузка keystore.properties
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -9,6 +20,17 @@ plugins {
 android {
     namespace = "com.rezerv.upload"
     compileSdk = 36
+
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storePassword = keystoreProperties["storePassword"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.rezerv.upload"
@@ -55,6 +77,13 @@ android {
             )
             ndk {
                 debugSymbolLevel = "NONE"
+            }
+            // ✅ ДОБАВИТЬ:
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                // Fallback на debug если keystore не настроен
+                signingConfig = signingConfigs.getByName("debug")
             }
         }
     }

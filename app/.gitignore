@@ -1,1 +1,85 @@
-/build
+# ==================== Gradle ====================
+.gradle/
+build/
+!gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# ==================== IDE ====================
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+*.swp
+*~.nib
+
+# Android Studio specific
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# ==================== Kotlin ====================
+.kotlin/
+
+# ==================== Build outputs ====================
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# ==================== Java ====================
+*.class
+*.log
+*.ctxt
+hs_err_pid*
+replay_pid*
+
+# ==================== Android ====================
+# Generated files
+gen/
+out/
+bin/
+
+# Keystore files (КРИТИЧНО!)
+*.jks
+*.keystore
+!debug.keystore
+
+# ==================== Секреты и пароли (КРИТИЧНО!) ====================
+keystore.properties
+google-services.json
+google-services.json.bak
+secrets.properties
+env.properties
+
+# ==================== OS ====================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ==================== Room ====================
+/schemas/
+
+# ==================== Testing ====================
+*.hprof
+coverage/
+
+# ==================== Compose Preview ====================
+.compose/
+
+# ==================== Logs ====================
+*.log
+
+# ==================== Temporary ====================
+*.tmp
+*.bak
+*.swp
+*~

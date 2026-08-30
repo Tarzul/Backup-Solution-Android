@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Подпапка cache/videos используется для скачивания видео перед открытием
-         через ACTION_VIEW во внешнем плеере -->
+    <!-- Для видео -->
     <cache-path name="videos" path="videos/" />
+
+    <!-- Для превью изображений (если нужно делиться) -->
+    <cache-path name="previews" path="previews/" />
+
+    <!-- Для временных файлов синхронизации -->
+    <cache-path name="sync_temp" path="sync_temp/" />
+
+    <!-- Для внешних файлов (опционально) -->
+    <external-files-path name="external_files" path="." />
 </paths>

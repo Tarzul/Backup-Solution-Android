@@ -1,13 +1,30 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
--->
+<?xml version="1.0" encoding="utf-8"?>
+
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+
+    <!-- ✅ Включаем только настройки пользователя (кроме credentials) -->
+    <include domain="sharedpref" path="user_preferences.xml" />
+    <include domain="sharedpref" path="app_settings.xml" />
+
+    <!-- ✅ Исключаем credentials -->
+    <exclude domain="sharedpref" path="webdav_settings_encrypted.xml" />
+    <exclude domain="sharedpref" path="webdav_settings.xml" />
+    <exclude domain="sharedpref" path="secure_prefs.xml" />
+
+    <!-- ✅ Исключаем базы данных -->
+    <exclude domain="database" path="history.db" />
+    <exclude domain="database" path="history.db-journal" />
+    <exclude domain="database" path="workmanager.db" />
+
+    <!-- ✅ Исключаем кэш и временные файлы -->
+    <exclude domain="file" path="thumbs/" />
+    <exclude domain="file" path="previews/" />
+    <exclude domain="file" path="webdav_http_cache/" />
+    <exclude domain="file" path="videos/" />
+    <exclude domain="file" path="sync_temp/" />
+    <exclude domain="file" path="logs/" />
+
+    <!-- ✅ Исключаем внешний кэш -->
+    <exclude domain="external" path="." />
+
 </full-backup-content>

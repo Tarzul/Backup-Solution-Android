@@ -1,96 +1,78 @@
 package com.rezerv.upload
 
 import android.Manifest
-import android.app.AlarmManager
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
-import android.util.Log
 import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.RecyclerView
+import com.rezerv.upload.navigation.NavigationManager
+import com.rezerv.upload.permissions.PermissionHandler
+import com.rezerv.upload.ui.ConnectionFormHandler
+import com.rezerv.upload.ui.FileBrowserHandler
 import com.rezerv.upload.ui.HistoryCardBuilder
-import com.rezerv.upload.ui.TaskCardBuilder
+import com.rezerv.upload.ui.TabManager
+import com.rezerv.upload.ui.WebDavFolderPickerDialog
+import com.rezerv.upload.ui.compose.TasksTab
+import com.rezerv.upload.ui.theme.RezervTheme
 import com.rezerv.upload.viewmodel.BrowserViewModel
 import com.rezerv.upload.viewmodel.ConnectionViewModel
 import com.rezerv.upload.viewmodel.HistoryViewModel
 import com.rezerv.upload.viewmodel.TasksViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
-import androidx.compose.ui.platform.ComposeView
-import com.rezerv.upload.ui.compose.TasksTab
-import com.rezerv.upload.ui.theme.RezervTheme
-
-import com.rezerv.upload.utils.Validators
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
+import timber.log.Timber
+import javax.inject.Inject
 
 @AndroidEntryPoint
-class MainActivity : AppCompatActivity() {
-    private val TAG = "MainActivity"
-    private var isHistoryFirstLoad = true  
+class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerListener {
 
-    // ✅ 4 ViewModel вместо одной
+    companion object {
+        private const val ANIMATION_DURATION_MS = 300L
+        private const val PADDING_DP = 48
+        private const val MAX_FOLDER_NAME_LENGTH = 255
+    }
+
+    @Inject lateinit var navigationManager: NavigationManager
+    @Inject lateinit var permissionHandler: PermissionHandler
+
+    // ViewModels
     private val connectionVM: ConnectionViewModel by viewModels()
     private val browserVM: BrowserViewModel by viewModels()
     private val tasksVM: TasksViewModel by viewModels()
     private val historyVM: HistoryViewModel by viewModels()
 
-    // Вкладки
-    private lateinit var btnTabConnection: Button
-    private lateinit var btnTabBrowser: Button
-    private lateinit var btnTabTasks: Button
-    private lateinit var btnTabHistory: Button
-    private lateinit var tabConnection: ScrollView
-    private lateinit var tabBrowser: View
-    private lateinit var tabHistory: ScrollView
+    // Handlers
+    private lateinit var tabManager: TabManager
+    private lateinit var connectionForm: ConnectionFormHandler
+    private lateinit var fileBrowser: FileBrowserHandler
 
-    // Подключение
-    private lateinit var etServer: EditText
-    private lateinit var etUser: EditText
-    private lateinit var etPass: EditText
-    private lateinit var spAuth: Spinner
+    // UI Components
     private lateinit var tvLog: TextView
-    private lateinit var btnConnect: Button
-
-    // Файлы
-    private lateinit var tvCurrentPath: TextView
-    private lateinit var rvFiles: RecyclerView
-    private lateinit var btnBack: Button
-    private lateinit var btnNewFolder: Button
-    private lateinit var llSelection: LinearLayout
-    private lateinit var tvSelectionCount: TextView
-
-    // История
-    private lateinit var historyChart: HistoryChartView
+    private lateinit var tabTasks: androidx.compose.ui.platform.ComposeView
     private lateinit var historyContainer: LinearLayout
     private lateinit var tvHistoryEmpty: TextView
-    private lateinit var btnClearHistory: Button
+    private lateinit var historyChart: HistoryChartView
+    private lateinit var skeletonHistory: View
 
-    // Skeleton screens
-    private lateinit var skeletonFiles: View
-    private lateinit var skeletonHistory: LinearLayout
+    // Состояние
+    private var picked: List<android.net.Uri> = emptyList()
+    private var isHistoryFirstLoad = true
+    private var pendingUploadCallback: ((String) -> Unit)? = null
 
-    private lateinit var tabTasks: ComposeView
-
-    private var picked: List<Uri> = emptyList()
-    private lateinit var fileAdapter: FileRecyclerViewAdapter
-
-    // ==================== Permission Launchers ====================
-
+    // Permission Launchers
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) connectionVM.log("✓ Уведомления разрешены")
+    ) { granted ->
+        if (granted) connectionVM.log(getString(R.string.notifications_allowed))
     }
 
     private val mediaPermissionLauncher = registerForActivityResult(
@@ -99,20 +81,23 @@ class MainActivity : AppCompatActivity() {
 
     private val exactAlarmSettingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {
-        connectionVM.ensureScheduler()
-    }
+    ) { connectionVM.ensureScheduler() }
 
-    private val picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+    private val picker = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
         picked = uris
         picked.forEach { uri ->
             try {
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
             } catch (e: Exception) {
-                Log.w(TAG, "Не удалось взять разрешение для $uri")
+                Timber.w(e, "Permission error for $uri")
             }
         }
-        browserVM.log("Выбрано файлов: ${picked.size}")
+        browserVM.log(getString(R.string.files_selected, picked.size))
     }
 
     // ==================== Lifecycle ====================
@@ -120,133 +105,226 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        coil.Coil.setImageLoader(
-            coil.ImageLoader.Builder(this)
-                .okHttpClient(WebDavClient.httpClient)
-                .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(0.25).build() }
-                .build()
-        )
+
         initViews()
         setupListeners()
         loadSettings()
         observeViewModels()
+        requestPermissions()
         connectionVM.ensureScheduler()
-        requestMediaPermissions()
-        requestNotifications()
-        promptExactAlarms()
-        promptBatteryOptimization()
     }
 
     override fun onResume() {
         super.onResume()
-        if (tabHistory.visibility == View.VISIBLE) historyVM.refreshHistory()
+        if (tabManager.isTabVisible(3)) historyVM.refreshHistory()
         checkExactAlarmStatus()
     }
 
-    // ==================== Наблюдение за ViewModel ====================
+    // ==================== Initialization ====================
+
+    private fun initViews() {
+        // Tabs
+        tabManager = TabManager(
+            tabs = mapOf(
+                0 to findViewById<ScrollView>(R.id.tabConnection),
+                1 to findViewById<View>(R.id.tabBrowser),
+                2 to findViewById<androidx.compose.ui.platform.ComposeView>(R.id.tabTasks)
+                    .also { tabTasks = it },
+                3 to findViewById<ScrollView>(R.id.tabHistory)
+            ),
+            buttons = mapOf(
+                0 to findViewById(R.id.btnTabConnection),
+                1 to findViewById(R.id.btnTabBrowser),
+                2 to findViewById(R.id.btnTabTasks),
+                3 to findViewById(R.id.btnTabHistory)
+            )
+        )
+
+        // Connection form (Spinner настраивается внутри)
+        connectionForm = ConnectionFormHandler(
+            context = this,
+            etServer = findViewById(R.id.etServer),
+            etUser = findViewById(R.id.etUser),
+            etPass = findViewById(R.id.etPass),
+            spAuth = findViewById(R.id.spAuth)
+        )
+
+        // File browser (с передачей browserVM для DragSelectionListener)
+        fileBrowser = FileBrowserHandler(
+            context = this,
+            browserVM = browserVM,
+            rvFiles = findViewById(R.id.rvFiles),
+            skeletonFiles = findViewById(R.id.skeletonFiles),
+            tvCurrentPath = findViewById(R.id.tvCurrentPath),
+            llSelection = findViewById(R.id.llSelection),
+            tvSelectionCount = findViewById(R.id.tvSelectionCount)
+        )
+
+        fileBrowser.setupAdapter(
+            serverUrl = { connectionVM.loadSettings().first },
+            user = { connectionVM.loadSettings().second },
+            pass = { connectionVM.loadSettings().third },
+            onItemClick = { item, position -> handleFileClick(item, position) }
+        )
+
+        // Остальные компоненты
+        tvLog = findViewById(R.id.tvLog)
+        historyChart = findViewById(R.id.historyChart)
+        historyContainer = findViewById(R.id.historyContainer)
+        tvHistoryEmpty = findViewById(R.id.tvHistoryEmpty)
+        skeletonHistory = findViewById(R.id.skeletonHistory)
+    }
+
+    private fun setupListeners() {
+        // Tabs
+        findViewById<Button>(R.id.btnTabConnection).setOnClickListener { switchToTab(0) }
+        findViewById<Button>(R.id.btnTabBrowser).setOnClickListener { switchToTab(1) }
+        findViewById<Button>(R.id.btnTabTasks).setOnClickListener { switchToTab(2) }
+        findViewById<Button>(R.id.btnTabHistory).setOnClickListener { switchToTab(3) }
+
+        // Connection
+        findViewById<Button>(R.id.btnConnect).setOnClickListener { handleConnect() }
+
+        // Browser
+        findViewById<Button>(R.id.btnBack).setOnClickListener {
+            val (server, user, pass) = connectionVM.loadSettings()
+            browserVM.navigateBack(server, user, pass)
+        }
+        findViewById<Button>(R.id.btnNewFolder).setOnClickListener { showNewFolderDialog() }
+        findViewById<Button>(R.id.btnPick).setOnClickListener { picker.launch(arrayOf("*/*")) }
+        findViewById<Button>(R.id.btnUpload).setOnClickListener { handleUpload() }
+        findViewById<Button>(R.id.btnSelDownload).setOnClickListener {
+            val (server, user, pass) = connectionVM.loadSettings()
+            browserVM.downloadSelected(server, user, pass)
+        }
+        findViewById<Button>(R.id.btnSelDelete).setOnClickListener { handleDelete() }
+        findViewById<Button>(R.id.btnSelCancel).setOnClickListener { browserVM.exitSelectionMode() }
+
+        // History
+        findViewById<Button>(R.id.btnClearHistory).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.clear_history)
+                .setPositiveButton(R.string.clear) { _, _ -> historyVM.clearHistory() }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+    }
+
+    // ==================== Permissions ====================
+
+    private fun requestPermissions() {
+        permissionHandler.getRequiredMediaPermissions(this).takeIf { it.isNotEmpty() }?.let {
+            mediaPermissionLauncher.launch(it.toTypedArray())
+        }
+
+        if (permissionHandler.shouldRequestNotifications(this)) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        if (permissionHandler.needsExactAlarmPermission(this)) {
+            exactAlarmSettingsLauncher.launch(permissionHandler.createExactAlarmIntent(this))
+        }
+
+        if (permissionHandler.needsBatteryOptimizationExemption(this)) {
+            try {
+                startActivity(permissionHandler.createBatteryOptimizationIntent(this))
+            } catch (e: Exception) {
+                Timber.w(e, "Cannot open battery settings")
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                } catch (e2: Exception) {
+                    Timber.w(e2, "Cannot open battery settings fallback")
+                }
+            }
+        }
+    }
+
+    private fun checkExactAlarmStatus() {
+        if (permissionHandler.needsExactAlarmPermission(this)) {
+            connectionVM.log(getString(R.string.exact_alarms_revoked))
+        }
+    }
+
+    // ==================== ViewModel Observers ====================
 
     private fun observeViewModels() {
-        // ConnectionViewModel
-        connectionVM.state.observe(this) {
-            // Можно обновить UI подключения
-        }
-        connectionVM.log.observe(this) { log -> tvLog.text = log }
-        connectionVM.events.observe(this) { event ->
-            when (event) {
-                is ConnectionViewModel.ConnectionEvent.Connected -> {
-                    switchToTab(1)
-                    val (server, user, pass) = connectionVM.loadSettings()
-                    browserVM.browseServer(server, event.serverPath, user, pass)
-                }
-                is ConnectionViewModel.ConnectionEvent.ConnectionFailed -> {
-                    Toast.makeText(this, "Ошибка: ${event.error}", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
+        observeConnectionVM()
+        observeBrowserVM()
+        observeTasksVM()
+        observeHistoryVM()
+    }
 
-        // BrowserViewModel
+    private fun observeConnectionVM() {
+        connectionVM.log.observe(this) { tvLog.text = it }
+        connectionVM.events.observe(this) { handleConnectionEvent(it) }
+    }
+
+    private fun observeBrowserVM() {
         browserVM.state.observe(this) { state ->
-            updateFileList(state)
-            updateSelectionUI(state.selectionMode, state.selectedIndices.size)
-            tvCurrentPath.text = "Путь: ${state.currentPath}"
+            fileBrowser.updateFileList(state)
+            fileBrowser.updateSelectionUI(state.selectionMode, state.selectedIndices.size)
+            fileBrowser.updateCurrentPath(state.currentPath)
         }
-        browserVM.log.observe(this) { log -> tvLog.text = log }
-        browserVM.events.observe(this) { event ->
-            when (event) {
-                is BrowserViewModel.BrowserEvent.ShowToast -> {
-                    Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
-                    if (event.message.startsWith("Загрузка:")) picked = emptyList()
-                }
-                is BrowserViewModel.BrowserEvent.OpenImagePager -> {
-                    showImagePager(event.startIndex)
-                }
-                is BrowserViewModel.BrowserEvent.UploadCompleted -> {
-                    historyVM.refreshHistory()
-                    switchToTab(3)
-                }
-            }
-        }
+        browserVM.log.observe(this) { tvLog.text = it }
+        browserVM.events.observe(this) { handleBrowserEvent(it) }
+    }
 
-// TasksViewModel
+    private fun observeTasksVM() {
         lifecycleScope.launch {
-            tasksVM.tasks.collect { tasks ->
-                if (tasks != null) {
-                    refreshTasks(tasks)
-                }
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                tasksVM.tasks
+                    .filterNotNull()
+                    .collect { tasks -> refreshTasks(tasks) }
             }
         }
+    }
 
-// HistoryViewModel
-        historyVM.records.observe(this) { records -> refreshHistory(records) }
+    private fun observeHistoryVM() {
+        historyVM.records.observe(this) { refreshHistory(it) }
+    }
+
+    private fun handleConnectionEvent(event: ConnectionViewModel.ConnectionEvent) {
+        when (event) {
+            is ConnectionViewModel.ConnectionEvent.Connected -> {
+                switchToTab(1)
+                val (server, user, pass) = connectionVM.loadSettings()
+                browserVM.browseServer(server, event.serverPath, user, pass)
+            }
+            is ConnectionViewModel.ConnectionEvent.ConnectionFailed -> {
+                Toast.makeText(
+                    this,
+                    "${getString(R.string.connection_failed)}: ${event.error}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    private fun handleBrowserEvent(event: BrowserViewModel.BrowserEvent) {
+        when (event) {
+            is BrowserViewModel.BrowserEvent.ShowToast -> {
+                Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
+                if (event.message.startsWith("Загрузка:")) picked = emptyList()
+            }
+            is BrowserViewModel.BrowserEvent.OpenImagePager -> showImagePager(event.startIndex)
+            is BrowserViewModel.BrowserEvent.UploadCompleted -> {
+                historyVM.refreshHistory()
+                switchToTab(3)
+            }
+        }
     }
 
     // ==================== UI Updates ====================
-
-    private fun updateFileList(state: BrowserViewModel.BrowserState) {
-        // Skeleton: показываем при загрузке
-        if (state.isLoading) {
-            skeletonFiles.visibility = View.VISIBLE
-            rvFiles.visibility = View.GONE
-        } else {
-            // Плавное появление контента
-            if (skeletonFiles.visibility == View.VISIBLE) {
-                rvFiles.alpha = 0f
-                rvFiles.visibility = View.VISIBLE
-                rvFiles.animate()
-                    .alpha(1f)
-                    .setDuration(300)
-                    .withEndAction { skeletonFiles.visibility = View.GONE }
-                    .start()
-            } else {
-                rvFiles.visibility = View.VISIBLE
-            }
-        }   
-
-        fileAdapter.selectionMode = state.selectionMode
-        fileAdapter.selectedIndices = state.selectedIndices.toMutableSet()
-        fileAdapter.submitList(state.files)
-    }
-
-    private fun updateSelectionUI(selectionMode: Boolean, count: Int) {
-        llSelection.visibility = if (selectionMode) View.VISIBLE else View.GONE
-        tvSelectionCount.text = "Выбрано: $count"
-        fileAdapter.selectionMode = selectionMode
-        fileAdapter.selectedIndices = browserVM.state.value?.selectedIndices?.toMutableSet() ?: mutableSetOf()
-        fileAdapter.notifyItemRangeChanged(
-            0, fileAdapter.itemCount, FileRecyclerViewAdapter.PAYLOAD_SELECTION_UPDATE
-        )
-    }
 
     private fun refreshTasks(tasks: List<SyncTask>) {
         tabTasks.setContent {
             RezervTheme {
                 TasksTab(
-                    onTaskClick = { taskId: String ->
-                        startActivity(Intent(this@MainActivity, TaskDetailsActivity::class.java)
-                            .putExtra("taskId", taskId))
+                    onTaskClick = { taskId ->
+                        navigationManager.openTaskDetails(this, taskId)
                     },
                     onCreateTask = {
-                        startActivity(Intent(this@MainActivity, TaskWizardActivity::class.java))
+                        navigationManager.openCreateTask(this)
                     }
                 )
             }
@@ -261,16 +339,15 @@ class MainActivity : AppCompatActivity() {
             isHistoryFirstLoad = false
             return
         }
-        
+
         isHistoryFirstLoad = false
-        
-        // Плавное появление контента
+
         if (skeletonHistory.visibility == View.VISIBLE) {
             historyContainer.alpha = 0f
             historyContainer.visibility = View.VISIBLE
             historyContainer.animate()
                 .alpha(1f)
-                .setDuration(300)
+                .setDuration(ANIMATION_DURATION_MS)
                 .withEndAction { skeletonHistory.visibility = View.GONE }
                 .start()
         } else {
@@ -279,313 +356,155 @@ class MainActivity : AppCompatActivity() {
 
         historyContainer.removeAllViews()
         historyChart.setRecords(records)
+
         if (records.isEmpty()) {
             tvHistoryEmpty.visibility = View.VISIBLE
             return
         }
-        tvHistoryEmpty.visibility = View.GONE
 
+        tvHistoryEmpty.visibility = View.GONE
         val historyBuilder = HistoryCardBuilder(this)
         val listener = object : HistoryCardBuilder.Listener {
             override fun onHistoryClick(record: HistoryRecord) {
-                startActivity(Intent(this@MainActivity, HistoryDetailsActivity::class.java)
-                    .putExtra("time", record.time))
+                navigationManager.openHistoryDetails(this@MainActivity, record.time)
             }
         }
-
-        for (r in records) historyContainer.addView(historyBuilder.build(r, listener))
-    }   
-
-    // ==================== Init Views ====================
-
-    private fun initViews() {
-        btnTabConnection = findViewById(R.id.btnTabConnection)
-        btnTabBrowser = findViewById(R.id.btnTabBrowser)
-        btnTabTasks = findViewById(R.id.btnTabTasks)
-        btnTabHistory = findViewById(R.id.btnTabHistory)
-        tabConnection = findViewById(R.id.tabConnection)
-        tabBrowser = findViewById(R.id.tabBrowser)
-        tabTasks = findViewById(R.id.tabTasks)
-        tabHistory = findViewById(R.id.tabHistory)
-        etServer = findViewById(R.id.etServer)
-        etUser = findViewById(R.id.etUser)
-        etPass = findViewById(R.id.etPass)
-        spAuth = findViewById(R.id.spAuth)
-        tvLog = findViewById(R.id.tvLog)
-        btnConnect = findViewById(R.id.btnConnect)
-        tvCurrentPath = findViewById(R.id.tvCurrentPath)
-        rvFiles = findViewById(R.id.rvFiles)
-        btnBack = findViewById(R.id.btnBack)
-        btnNewFolder = findViewById(R.id.btnNewFolder)
-        llSelection = findViewById(R.id.llSelection)
-        tvSelectionCount = findViewById(R.id.tvSelectionCount)
-        historyChart = findViewById(R.id.historyChart)
-        historyContainer = findViewById(R.id.historyContainer)
-        tvHistoryEmpty = findViewById(R.id.tvHistoryEmpty)
-        btnClearHistory = findViewById(R.id.btnClearHistory)
-        skeletonFiles = findViewById(R.id.skeletonFiles)
-        skeletonHistory = findViewById(R.id.skeletonHistory)
-
-        rvFiles.layoutManager = LinearLayoutManager(this)
-        rvFiles.itemAnimator = null
-        fileAdapter = FileRecyclerViewAdapter(
-            this,
-            serverUrl = { connectionVM.loadSettings().first },
-            user = { connectionVM.loadSettings().second },
-            pass = { connectionVM.loadSettings().third },
-            onItemClick = { item, position -> handleFileClick(item, position) }
-        )
-        rvFiles.adapter = fileAdapter
-        rvFiles.addOnItemTouchListener(
-            DragSelectionListener(
-                recyclerView = rvFiles,
-                isSelectionActive = { browserVM.state.value?.selectionMode ?: false },
-                onStartSelection = { pos -> browserVM.startSelectionMode(pos) },
-                onDragStart = { anchor, forceAdd -> browserVM.beginRangeSelection(anchor, forceAdd) },
-                onRangeSelect = { anchor, current -> browserVM.selectRange(anchor, current) }
-            )
-        )
-
-        val authTypes = resources.getStringArray(R.array.auth_types)
-        val spinnerAdapter = ArrayAdapter(this, R.layout.spinner_item, authTypes)
-        spinnerAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item)
-        spAuth.adapter = spinnerAdapter
-        spAuth.background = null
+        records.forEach { historyContainer.addView(historyBuilder.build(it, listener)) }
     }
 
-    private fun setupListeners() {
-        btnTabConnection.setOnClickListener { switchToTab(0) }
-        btnTabBrowser.setOnClickListener { switchToTab(1) }
-        btnTabTasks.setOnClickListener { switchToTab(2) }
-        btnTabHistory.setOnClickListener { switchToTab(3) }
+    // ==================== Actions ====================
 
-        btnClearHistory.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle("Очистить историю?")
-                .setPositiveButton("Очистить") { _, _ -> historyVM.clearHistory() }
-                .setNegativeButton("Отмена", null).show()
-        }
+    private fun handleConnect() {
+        val (server, user, pass) = connectionForm.getCredentials()
+        val authType = connectionForm.getAuthType()
 
-        btnConnect.setOnClickListener {
-            val server = etServer.text.toString()
-            val user = etUser.text.toString()
-            val pass = etPass.text.toString()
-            val authType = spAuth.selectedItemPosition
+        if (!connectionForm.validate()) return
+        connectionForm.clearErrors()
 
-            // ✅ Валидация URL
-            val serverError = Validators.validateServerUrl(server)
-            if (serverError != null) {
-                Toast.makeText(this, serverError, Toast.LENGTH_SHORT).show()
-                etServer.error = serverError
-                etServer.requestFocus()
-                return@setOnClickListener
-            }
-
-            // ✅ Валидация логина
-            val userError = Validators.validateUsername(user)
-            if (userError != null) {
-                Toast.makeText(this, userError, Toast.LENGTH_SHORT).show()
-                etUser.error = userError
-                etUser.requestFocus()
-                return@setOnClickListener
-            }
-
-            // ✅ Валидация пароля
-            val passError = Validators.validatePassword(pass)
-            if (passError != null) {
-                Toast.makeText(this, passError, Toast.LENGTH_SHORT).show()
-                etPass.error = passError
-                etPass.requestFocus()
-             return@setOnClickListener
-            }
-
-            // Все проверки пройдены
-            etServer.error = null
-            etUser.error = null
-            etPass.error = null
-    
-            connectionVM.saveSettings(server, user, pass, authType)
-            connectionVM.connect(server, user, pass)
-        }   
-
-        btnBack.setOnClickListener {
-            val (server, user, pass) = connectionVM.loadSettings()
-            browserVM.navigateBack(server, user, pass)
-        }
-
-
-        btnNewFolder.setOnClickListener {
-            val input = EditText(this).apply {
-                hint = "Имя папки"
-                setPadding(48, 24, 48, 24)
-                setTextColor(0xFFFFFFFF.toInt())
-                setHintTextColor(0xFF888888.toInt())
-                setBackgroundResource(R.drawable.bg_input_dark)
-                filters = arrayOf(android.text.InputFilter.LengthFilter(255))  // ✅ Ограничение длины
-            }
-            AlertDialog.Builder(this)
-                .setTitle("Создать папку")
-                .setView(input)
-                .setPositiveButton("Создать") { _, _ ->
-                    val name = input.text.toString().trim()
-                    // ✅ Валидация
-                    val error = Validators.validateFolderName(name)
-                    if (error != null) {
-                        Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
-                        return@setPositiveButton
-                    }
-                    val (server, user, pass) = connectionVM.loadSettings()
-                    browserVM.createFolder(server, name, user, pass)
-                }
-                .setNegativeButton("Отмена", null).show()
-        }
-
-        findViewById<Button>(R.id.btnPick).setOnClickListener { picker.launch(arrayOf("*/*")) }
-
-        findViewById<Button>(R.id.btnUpload).setOnClickListener {
-            val (server, user, pass) = connectionVM.loadSettings()
-            if (server.isBlank()) { browserVM.log("Ошибка: сервер не подключён"); return@setOnClickListener }
-            if (picked.isEmpty()) { browserVM.log("Нет выбранных файлов"); return@setOnClickListener }
-            showServerFolderPicker(server, user, pass) { targetPath ->
-                browserVM.uploadFilesToPath(server, user, pass, picked, targetPath)
-            }
-        }
-
-        findViewById<Button>(R.id.btnSelDownload).setOnClickListener {
-            val (server, user, pass) = connectionVM.loadSettings()
-            browserVM.downloadSelected(server, user, pass)
-        }
-
-        findViewById<Button>(R.id.btnSelDelete).setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle("Удалить элементы?")
-                .setMessage("Выбрано: ${browserVM.getSelectedCount()}")
-                .setPositiveButton("Удалить") { _, _ ->
-                    val (server, user, pass) = connectionVM.loadSettings()
-                    browserVM.deleteSelected(server, user, pass)
-                }
-                .setNegativeButton("Отмена", null).show()
-        }
-
-        findViewById<Button>(R.id.btnSelCancel).setOnClickListener { browserVM.exitSelectionMode() }
+        connectionVM.saveSettings(server, user, pass, authType)
+        connectionVM.connect(server, user, pass)
     }
 
-    // ==================== File Clicks ====================
+    private fun showNewFolderDialog() {
+        val input = EditText(this).apply {
+            hint = getString(R.string.folder_name)
+            val paddingPx = (PADDING_DP * resources.displayMetrics.density).toInt()
+            setPadding(paddingPx, paddingPx / 2, paddingPx, paddingPx / 2)
+            setTextColor(0xFFFFFFFF.toInt())
+            setHintTextColor(0xFF888888.toInt())
+            setBackgroundResource(R.drawable.bg_input_dark)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(MAX_FOLDER_NAME_LENGTH))
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.create_folder)
+            .setView(input)
+            .setPositiveButton(R.string.create) { _, _ ->
+                val name = input.text.toString().trim()
+                com.rezerv.upload.utils.Validators.validateFolderName(name)?.let { error ->
+                    Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val (server, user, pass) = connectionVM.loadSettings()
+                browserVM.createFolder(server, name, user, pass)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun handleUpload() {
+        val (server, user, pass) = connectionVM.loadSettings()
+
+        when {
+            server.isBlank() -> browserVM.log(getString(R.string.server_not_connected))
+            picked.isEmpty() -> browserVM.log(getString(R.string.no_files_selected))
+            else -> {
+                pendingUploadCallback = { targetPath ->
+                    browserVM.uploadFilesToPath(server, user, pass, picked, targetPath)
+                }
+                showServerFolderPicker(server, user, pass)
+            }
+        }
+    }
+
+    private fun handleDelete() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.delete_items)
+            .setMessage(getString(R.string.selected_count, browserVM.getSelectedCount()))
+            .setPositiveButton(R.string.delete) { _, _ ->
+                val (server, user, pass) = connectionVM.loadSettings()
+                browserVM.deleteSelected(server, user, pass)
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
 
     private fun handleFileClick(item: WebDavRepository.FileInfo, position: Int) {
-        val state = browserVM.state.value ?: return
+        val currentState = browserVM.state.value
+        if (currentState == null) {
+            Timber.w("Browser state is null during file click")
+            return
+        }
 
-        if (state.selectionMode) {
-            browserVM.toggleSelection(position)
-        } else if (item.isDirectory) {
-            val (server, user, pass) = connectionVM.loadSettings()
-            if (server.isNotBlank()) {
-                browserVM.browseServer(server, item.path, user, pass)
-            } else {
-                browserVM.log("Ошибка: сервер не подключён")
+        when {
+            currentState.selectionMode -> browserVM.toggleSelection(position)
+            item.isDirectory -> {
+                val (server, user, pass) = connectionVM.loadSettings()
+                if (server.isNotBlank()) {
+                    browserVM.browseServer(server, item.path, user, pass)
+                } else {
+                    browserVM.log(getString(R.string.server_not_connected))
+                }
             }
-        } else if (FileUtils.isImageFile(item.name)) {
-            browserVM.openImagePager(item)
-        } else if (FileUtils.isVideoFile(item.name)) {
-            browserVM.viewVideo(this, item)
-        } else {
-            val (server, user, pass) = connectionVM.loadSettings()
-            browserVM.downloadFile(server, item.path, item.name, user, pass)
+            FileUtils.isImageFile(item.name) -> browserVM.openImagePager(item)
+            FileUtils.isVideoFile(item.name) -> browserVM.viewVideo(this, item)
+            else -> {
+                val (server, user, pass) = connectionVM.loadSettings()
+                browserVM.downloadFile(server, item.path, item.name, user, pass)
+            }
         }
     }
 
-    // ==================== Folder Picker ====================
+    // ==================== Folder Picker (без рекурсии) ====================
 
-    private fun showServerFolderPicker(server: String, user: String, pass: String, onFolderSelected: (String) -> Unit) {
+    private fun showServerFolderPicker(server: String, user: String, pass: String) {
         val base = WebDavRepository.normalizeBaseUrl(server)
-        if (base == null) { browserVM.log("Ошибка: неверный адрес сервера"); return }
+        if (base == null) {
+            browserVM.log("Ошибка: неверный адрес сервера")
+            return
+        }
+
         val root = WebDavRepository.getServerPath(server)
-        showFolderPickerDialog(base, root, user, pass, root, onFolderSelected)
+        val dialog = WebDavFolderPickerDialog.newInstance(base, root, user, pass)
+        dialog.show(supportFragmentManager, "folder_picker")
     }
 
-    private fun showFolderPickerDialog(
-        base: String, root: String, user: String, pass: String,
-        currentPath: String, onFolderSelected: (String) -> Unit
-    ) {
-        lifecycleScope.launch {
-            try {
-                val files = withContext(Dispatchers.IO) {
-                    WebDavRepository.listFiles(base, currentPath, user, pass)
-                }
-                val folders = files.filter { it.isDirectory }.map { it.name }.sorted()
-                val displayItems = mutableListOf<String>()
-                if (currentPath != root) displayItems.add(".. (вверх)")
-                displayItems.addAll(folders)
-                withContext(Dispatchers.Main) {
-                    if (isFinishing || isDestroyed) return@withContext
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Папка: $currentPath")
-                        .setItems(displayItems.toTypedArray()) { _, which ->
-                            val selected = displayItems[which]
-                            if (selected == ".. (вверх)") {
-                                val trimmed = currentPath.trimEnd('/')
-                                val lastSlash = trimmed.lastIndexOf('/')
-                                val newPath = if (lastSlash <= 0) root else trimmed.substring(0, lastSlash + 1)
-                                showFolderPickerDialog(base, root, user, pass, newPath, onFolderSelected)
-                            } else {
-                                val newPath = currentPath.trimEnd('/') + "/" + selected + "/"
-                                showFolderPickerDialog(base, root, user, pass, newPath, onFolderSelected)
-                            }
-                        }
-                        .setPositiveButton("Выбрать эту папку") { _, _ -> onFolderSelected(currentPath) }
-                        .setNegativeButton("Отмена", null)
-                        .show()
-                }
-            } catch (e: Exception) {
-                browserVM.log("Ошибка загрузки списка папок: ${e.message}")
-            }
-        }
+    override fun onFolderSelected(path: String) {
+        pendingUploadCallback?.invoke(path)
+        pendingUploadCallback = null
+    }
+
+    override fun onFolderPickerCancelled() {
+        pendingUploadCallback = null
     }
 
     // ==================== Tabs ====================
 
     private fun switchToTab(tab: Int) {
-        tabConnection.visibility = View.GONE
-        tabBrowser.visibility = View.GONE
-        tabTasks.visibility = View.GONE
-        tabHistory.visibility = View.GONE
-        btnTabConnection.setBackgroundResource(R.drawable.bg_button_secondary)
-        btnTabBrowser.setBackgroundResource(R.drawable.bg_button_secondary)
-        btnTabTasks.setBackgroundResource(R.drawable.bg_button_secondary)
-        btnTabHistory.setBackgroundResource(R.drawable.bg_button_secondary)
-        val inactiveColor = 0xFFE0E0E0.toInt()
-        btnTabConnection.setTextColor(inactiveColor)
-        btnTabBrowser.setTextColor(inactiveColor)
-        btnTabTasks.setTextColor(inactiveColor)
-        btnTabHistory.setTextColor(inactiveColor)
+        tabManager.switchTo(tab) { tabNum ->
+            when (tabNum) {
+                1 -> loadBrowserIfNeeded()
+                3 -> historyVM.refreshHistory()
+            }
+        }
+    }
 
-        when (tab) {
-            0 -> {
-                tabConnection.visibility = View.VISIBLE
-                btnTabConnection.setBackgroundResource(R.drawable.bg_button_primary)
-                btnTabConnection.setTextColor(0xFF000000.toInt())
-            }
-            1 -> {
-                tabBrowser.visibility = View.VISIBLE
-                btnTabBrowser.setBackgroundResource(R.drawable.bg_button_primary)
-                btnTabBrowser.setTextColor(0xFF000000.toInt())
-                val (server, user, pass) = connectionVM.loadSettings()
-                val state = browserVM.state.value
-                if (server.isNotBlank() && state?.files.isNullOrEmpty() && state?.isLoading != true) {
-                    browserVM.browseServer(server, WebDavRepository.getServerPath(server), user, pass)
-                }
-            }
-            2 -> {
-                tabTasks.visibility = View.VISIBLE
-                btnTabTasks.setBackgroundResource(R.drawable.bg_button_primary)
-                btnTabTasks.setTextColor(0xFF000000.toInt())
-            }
-            3 -> {
-                tabHistory.visibility = View.VISIBLE
-                btnTabHistory.setBackgroundResource(R.drawable.bg_button_primary)
-                btnTabHistory.setTextColor(0xFF000000.toInt())
-                historyVM.refreshHistory()
-            }
+    private fun loadBrowserIfNeeded() {
+        val (server, user, pass) = connectionVM.loadSettings()
+        val state = browserVM.state.value
+
+        if (server.isNotBlank() && state?.files.isNullOrEmpty() && state?.isLoading != true) {
+            browserVM.browseServer(server, WebDavRepository.getServerPath(server), user, pass)
         }
     }
 
@@ -594,6 +513,7 @@ class MainActivity : AppCompatActivity() {
     private fun showImagePager(startIndex: Int) {
         val (server, user, pass) = connectionVM.loadSettings()
         val fragment = ImagePagerFragment.newInstance(startIndex, server, user, pass)
+
         supportFragmentManager.beginTransaction()
             .replace(android.R.id.content, fragment)
             .addToBackStack(null)
@@ -605,103 +525,10 @@ class MainActivity : AppCompatActivity() {
     private fun loadSettings() {
         val (server, user, pass) = connectionVM.loadSettings()
         val authType = SecurePrefs.loadAuthType(this)
-        etServer.setText(server)
-        etUser.setText(user)
-        etPass.setText(pass)
-        spAuth.setSelection(authType)
-        if (server.isNotEmpty()) connectionVM.log("Настройки загружены")
-    }
+        connectionForm.setCredentials(server, user, pass, authType)
 
-    // ==================== Permissions ====================
-
-    private fun requestMediaPermissions() {
-        val permissionsNeeded = mutableListOf<String>()
-        when {
-            Build.VERSION.SDK_INT >= 34 -> {
-                if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_IMAGES)
-                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VIDEO)
-                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
-            }
-            Build.VERSION.SDK_INT >= 33 -> {
-                if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_IMAGES)
-                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VIDEO)
-            }
-            Build.VERSION.SDK_INT >= 23 -> {
-                if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-                if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
-                    permissionsNeeded.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            }
-        }
-        if (permissionsNeeded.isNotEmpty()) mediaPermissionLauncher.launch(permissionsNeeded.toTypedArray())
-    }
-
-    private fun requestNotifications() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            when {
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED -> {}
-                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) -> {
-                    AlertDialog.Builder(this)
-                        .setTitle("Уведомления")
-                        .setMessage("Приложение отправляет уведомления о результатах синхронизации. Разрешить?")
-                        .setPositiveButton("Разрешить") { _, _ ->
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                        .setNegativeButton("Не сейчас", null)
-                        .show()
-                }
-                else -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-    }
-
-    private fun promptExactAlarms() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val am = getSystemService(AlarmManager::class.java) ?: return
-            if (Build.VERSION.SDK_INT >= 34 && am.canScheduleExactAlarms()) return
-            if (!am.canScheduleExactAlarms()) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    try {
-                        exactAlarmSettingsLauncher.launch(
-                            Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
-                    } catch (_: Exception) {
-                        try {
-                            exactAlarmSettingsLauncher.launch(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-        }
-    }
-
-    private fun checkExactAlarmStatus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val am = getSystemService(AlarmManager::class.java) ?: return
-            if (!am.canScheduleExactAlarms()) {
-                connectionVM.log("⚠ Точные будильники отозваны")
-            }
-        }
-    }
-
-    private fun promptBatteryOptimization() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val pm = getSystemService(android.os.PowerManager::class.java)
-            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
-                try {
-                    startActivity(Intent(
-                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:$packageName")))
-                } catch (e: Exception) {
-                    try {
-                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                    } catch (_: Exception) {}
-                }
-            }
+        if (server.isNotEmpty()) {
+            connectionVM.log(getString(R.string.settings_loaded))
         }
     }
 }

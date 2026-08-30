@@ -14,11 +14,14 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_IMAGES"
         android:minSdkVersion="33" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_VIDEO"
         android:minSdkVersion="33" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
         android:minSdkVersion="34" />
 
     <!-- ==================== Уведомления и Батарея ==================== -->
@@ -79,6 +82,20 @@
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="34">
 
+        <!-- ==================== WorkManager Configuration ==================== -->
+        <!-- ✅ КРИТИЧНО: Отключаем дефолтный инициализатор WorkManager -->
+        <!-- Это предотвращает crash "WorkManager is already initialized" -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <!-- ==================== Активности ==================== -->
         <activity
             android:name=".MainActivity"
@@ -106,7 +123,7 @@
             android:name=".SyncAlarmReceiver"
             android:exported="false" />
 
-        <!-- ✅ ДОБАВЛЕНО: Receiver для отмены синхронизации из Notification -->
+        <!-- ✅ Receiver для отмены синхронизации из Notification -->
         <receiver
             android:name=".CancelSyncReceiver"
             android:exported="false" />
@@ -115,7 +132,8 @@
             android:name=".BootReceiver"
             android:exported="true"
             android:enabled="true">
-            <intent-filter android:priority="999">
+            <!-- ✅ Убрали android:priority="999" - используем стандартный приоритет -->
+            <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />

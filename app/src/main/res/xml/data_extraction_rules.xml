@@ -1,16 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
+
+    <!-- ==================== Cloud Backup (Android 12+) ==================== -->
     <cloud-backup>
-        <!-- Исключаем настройки с кредами -->
+        <!-- ✅ Исключаем credentials (уже есть - отлично!) -->
         <exclude domain="sharedpref" path="webdav_settings_encrypted.xml" />
         <exclude domain="sharedpref" path="webdav_settings.xml" />
-        <!-- Исключаем кэш изображений -->
+
+        <!-- ✅ Исключаем secure preferences (если используется) -->
+        <exclude domain="sharedpref" path="secure_prefs.xml" />
+
+        <!-- ✅ Исключаем кэш изображений (уже есть - отлично!) -->
         <exclude domain="file" path="thumbs/" />
         <exclude domain="file" path="previews/" />
         <exclude domain="file" path="webdav_http_cache/" />
+
+        <!-- ✅ ДОБАВЛЕНО: Исключаем базу данных истории -->
+        <exclude domain="database" path="history.db" />
+        <exclude domain="database" path="history.db-journal" />
+        <exclude domain="database" path="history.db-wal" />
+        <exclude domain="database" path="history.db-shm" />
+
+        <!-- ✅ ДОБАВЛЕНО: Исключаем WorkManager состояние -->
+        <exclude domain="database" path="workmanager.db" />
+
+        <!-- ✅ ДОБАВЛЕНО: Исключаем логи -->
+        <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="no_backup/" />
+
+        <!-- ✅ Исключаем временные файлы синхронизации -->
+        <exclude domain="file" path="sync_temp/" />
     </cloud-backup>
+
+    <!-- ==================== Device Transfer (Android 12+) ==================== -->
     <device-transfer>
+        <!-- ✅ Исключаем credentials (уже есть) -->
         <exclude domain="sharedpref" path="webdav_settings_encrypted.xml" />
         <exclude domain="sharedpref" path="webdav_settings.xml" />
+        <exclude domain="sharedpref" path="secure_prefs.xml" />
+
+        <!-- ✅ Исключаем историю (она специфична для устройства) -->
+        <exclude domain="database" path="history.db" />
+        <exclude domain="database" path="workmanager.db" />
+
+        <!-- ✅ Исключаем кэш и временные файлы -->
+        <exclude domain="file" path="thumbs/" />
+        <exclude domain="file" path="previews/" />
+        <exclude domain="file" path="webdav_http_cache/" />
     </device-transfer>
+
 </data-extraction-rules>

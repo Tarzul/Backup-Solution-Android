@@ -180,6 +180,9 @@ dependencies {
     implementation("androidx.hilt:hilt-work:1.4.0")
     ksp("androidx.hilt:hilt-compiler:1.4.0")
 
+    // Logging
+    implementation("com.jakewharton.timber:timber:5.0.1")
+
 // ==================== Изображения ====================
 // Coil 3 для Compose (новый код)
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")

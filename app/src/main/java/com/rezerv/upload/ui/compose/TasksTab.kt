@@ -12,7 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.rezerv.upload.SyncTask
 import com.rezerv.upload.viewmodel.TasksViewModel
@@ -126,8 +126,8 @@ private fun TaskCard(
                 Icon(
                     when (task.syncType) {
                         "two_way" -> Icons.Default.SyncAlt
-                        "to_left" -> Icons.Default.ArrowBack
-                        else -> Icons.Default.ArrowForward
+                        "to_left" -> Icons.AutoMirrored.Filled.ArrowBack
+                        else -> Icons.AutoMirrored.Filled.ArrowForward
                     },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary

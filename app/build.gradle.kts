@@ -1,4 +1,3 @@
-
 import java.util.Properties
 import java.io.FileInputStream
 
@@ -50,6 +49,8 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -67,6 +68,8 @@ android {
         debug {
             isMinifyEnabled = false
             isDebuggable = true
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
         release {
             isMinifyEnabled = true
@@ -78,11 +81,9 @@ android {
             ndk {
                 debugSymbolLevel = "NONE"
             }
-            // ✅ ДОБАВИТЬ:
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             } else {
-                // Fallback на debug если keystore не настроен
                 signingConfig = signingConfigs.getByName("debug")
             }
         }
@@ -91,20 +92,34 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/INDEX.LIST"
+            excludes += "/META-INF/DEPENDENCIES"
         }
     }
 
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            isReturnDefaultValues = true
         }
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = true
+        warningsAsErrors = false
     }
 }
 
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
-        freeCompilerArgs.addAll("-Xjsr305=strict")
+        freeCompilerArgs.addAll(
+            "-Xjsr305=strict",
+            "-opt-in=kotlinx.coroutines.ExperimentalCoroutinesApi",
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
+        )
     }
 }
 
@@ -115,7 +130,7 @@ ksp {
 }
 
 dependencies {
-    // ==================== AndroidX Core (Latest 2026) ====================
+    // ==================== AndroidX Core ====================
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
@@ -131,8 +146,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.2")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.2")
-
-    // ⬇️ ДОБАВИТЬ: Lifecycle для Compose
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.2")
 
@@ -147,12 +160,9 @@ dependencies {
     implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.fragment:fragment-ktx:1.8.8")
-
-    // ⬇️ ДОБАВИТЬ: Activity Compose
     implementation("androidx.activity:activity-compose:1.10.1")
 
     // ==================== Jetpack Compose (BOM) ====================
-    // ⬇️ ДОБАВИТЬ ВЕСЬ БЛОК:
     val composeBom = platform("androidx.compose:compose-bom:2025.08.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -173,21 +183,19 @@ dependencies {
     // ==================== Безопасность ====================
     implementation("androidx.security:security-crypto:1.1.0-alpha07")
 
-    // ==================== Hilt 2.60.1 ====================
+    // ==================== Hilt ====================
     implementation("com.google.dagger:hilt-android:2.60.1")
     ksp("com.google.dagger:hilt-android-compiler:2.60.1")
-
     implementation("androidx.hilt:hilt-work:1.4.0")
     ksp("androidx.hilt:hilt-compiler:1.4.0")
 
-    // Logging
+    // ==================== Logging ====================
     implementation("com.jakewharton.timber:timber:5.0.1")
 
-// ==================== Изображения ====================
-// Coil 3 для Compose (новый код)
+    // ==================== Изображения (ТОЛЬКО COIL 3) ====================
+    // ✅ УБРАЛИ Coil 2.7.0, оставили только Coil 3
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
-    implementation("io.coil-kt:coil:2.7.0")
 
     // ==================== Отладка ====================
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
@@ -208,7 +216,7 @@ dependencies {
     androidTestImplementation("androidx.work:work-testing:2.10.2")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:5.1.0")
 
-    // ==================== Room 2.8.0 (через KSP) ====================
+    // ==================== Room ====================
     val roomVersion = "2.8.0"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")

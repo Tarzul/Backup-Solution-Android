@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- ✅ Типы аутентификации (оставляем здесь) -->
     <string-array name="auth_types">
         <item>Авто (Basic + Digest)</item>
         <item>Только Basic</item>
         <item>Только Digest</item>
     </string-array>
-    
-    <!-- Можно добавить дополнительные массивы для будущего использования -->
+
+    <!-- Режимы расписания -->
     <string-array name="schedule_modes">
         <item>Минуты</item>
         <item>Ежечасно</item>
@@ -14,4 +16,16 @@
         <item>Еженедельно</item>
         <item>Ежемесячно</item>
     </string-array>
+
+    <!-- Дни недели -->
+    <string-array name="week_days">
+        <item>Пн</item>
+        <item>Вт</item>
+        <item>Ср</item>
+        <item>Чт</item>
+        <item>Пт</item>
+        <item>Сб</item>
+        <item>Вс</item>
+    </string-array>
+
 </resources>

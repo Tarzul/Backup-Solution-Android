@@ -3,22 +3,23 @@ package com.rezerv.upload
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import coil.ImageLoader
-import coil.ImageLoaderFactory
-import coil.memory.MemoryCache
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
 
 @HiltAndroidApp
-class BackupApplication : Application(), Configuration.Provider, ImageLoaderFactory {
+class BackupApplication : Application(), Configuration.Provider, SingletonImageLoader.Factory {
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
     override fun onCreate() {
         super.onCreate()
-
         initTimber()
     }
 
@@ -30,19 +31,19 @@ class BackupApplication : Application(), Configuration.Provider, ImageLoaderFact
             Timber.d("Timber initialized in RELEASE mode")
         }
     }
-
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
-            .setMinimumLoggingLevel(android.util.Log.INFO)
+            .setMinimumLoggingLevel(if (BuildConfig.DEBUG) android.util.Log.DEBUG else android.util.Log.INFO)
             .build()
-
-    override fun newImageLoader(): ImageLoader {
-        return ImageLoader.Builder(this)
-            .okHttpClient(WebDavClient.httpClient)
+    override fun newImageLoader(context: PlatformContext): ImageLoader {
+        return ImageLoader.Builder(context)
+            .components {
+                add(OkHttpNetworkFetcherFactory(WebDavClient.httpClient))
+            }
             .memoryCache {
-                MemoryCache.Builder(this)
-                    .maxSizePercent(0.25)
+                MemoryCache.Builder()
+                    .maxSizePercent(context, 0.25)
                     .build()
             }
             .crossfade(true)

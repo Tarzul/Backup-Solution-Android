@@ -12,8 +12,8 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import coil.dispose
-import coil.load
+import coil3.dispose
+import coil3.load
 
 class FileRecyclerViewAdapter(
     private val context: Context,
@@ -35,16 +35,13 @@ class FileRecyclerViewAdapter(
         return ViewHolder(view)
     }
 
-    // ✅ ОБЯЗАТЕЛЬНЫЙ метод — вызывает версию с payloads
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         onBindViewHolder(holder, position, mutableListOf())
     }
 
-    // ✅ Опциональный метод с payloads для частичных обновлений
     override fun onBindViewHolder(holder: ViewHolder, position: Int, payloads: MutableList<Any>) {
         val item = getItem(position)
-        
-        // Частичное обновление (только выделение)
+
         if (payloads.contains(PAYLOAD_SELECTION_UPDATE)) {
             val isSel = selectedIndices.contains(position)
             holder.itemView.setBackgroundColor(
@@ -55,8 +52,7 @@ class FileRecyclerViewAdapter(
             holder.checkMark.visibility = if (selectionMode) View.VISIBLE else View.GONE
             return
         }
-        
-        // Полное обновление элемента
+
         val isSel = selectedIndices.contains(position)
         holder.itemView.setBackgroundColor(
             if (isSel) ContextCompat.getColor(context, R.color.selection_highlight)
@@ -70,19 +66,20 @@ class FileRecyclerViewAdapter(
         holder.infoView.text = FileUtils.getInfoText(item)
         holder.infoView.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
 
-        // Загрузка миниатюры для изображений
         if (!item.isDirectory && FileUtils.isImageFile(item.name)) {
             holder.icon.dispose()
-            
+
             holder.icon.load(WebDavImages.url(serverUrl(), item.path)) {
+                // ✅ addHeader() работает напрямую в Coil 3
                 addHeader("Authorization", WebDavImages.basicHeader(user(), pass()))
                 memoryCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_report_image)
-                crossfade(true)
+                // ✅ placeholder принимает Drawable, используем ContextCompat
+                placeholder(ContextCompat.getDrawable(context, android.R.drawable.ic_menu_gallery))
+                error(ContextCompat.getDrawable(context, android.R.drawable.ic_menu_report_image))
+                // ✅ crossfade убран - настроен глобально в BackupApplication
                 size(96, 96)
-                
+
                 listener(
                     onError = { _, _ ->
                         holder.icon.setImageResource(android.R.drawable.ic_menu_report_image)
@@ -95,7 +92,6 @@ class FileRecyclerViewAdapter(
             holder.icon.setImageResource(FileUtils.getIconResource(item))
         }
 
-        // Чекбокс выделения
         if (selectionMode) {
             holder.checkMark.visibility = View.VISIBLE
             holder.checkMark.isChecked = isSel

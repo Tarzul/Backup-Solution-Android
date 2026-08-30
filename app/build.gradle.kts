@@ -193,7 +193,7 @@ dependencies {
     implementation("com.jakewharton.timber:timber:5.0.1")
 
     // ==================== Изображения (ТОЛЬКО COIL 3) ====================
-    // ✅ УБРАЛИ Coil 2.7.0, оставили только Coil 3
+    implementation("io.coil-kt.coil3:coil:3.3.0")
     implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
 

@@ -9,13 +9,14 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
-import coil.load
-import coil.request.ImageRequest
+import coil3.load
+import coil3.request.ImageRequest
 import com.rezerv.upload.viewmodel.BrowserViewModel
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -83,26 +84,21 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         thumbsAdapter = ThumbAdapter()
         thumbsRecycler.adapter = thumbsAdapter
 
-        // Динамический padding: крайние миниатюры могут вставать ровно по центру
         thumbsRecycler.post {
             setupCarouselPadding()
             centerThumbImmediate(pager.currentItem)
         }
 
-        // ==================== Карусель → пейджер ====================
         thumbsRecycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                 when (newState) {
                     RecyclerView.SCROLL_STATE_DRAGGING -> userScrolledThumbs = true
-
                     RecyclerView.SCROLL_STATE_SETTLING -> {
                         if (!programmaticThumbsScroll) userScrolledThumbs = true
                     }
-
                     RecyclerView.SCROLL_STATE_IDLE -> {
                         if (userScrolledThumbs) {
                             userScrolledThumbs = false
-                            // палец отпущен — плавно доцентровываем ближайшую миниатюру
                             val pos = centerThumbPosition()
                             if (pos != -1) {
                                 if (pos != pager.currentItem) pager.setCurrentItem(pos, false)
@@ -117,14 +113,12 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 if (!userScrolledThumbs) return
                 val pos = centerThumbPosition()
-                // во время drag меняем ТОЛЬКО пейджер, карусель не трогаем
                 if (pos != -1 && pos != pager.currentItem) {
                     pager.setCurrentItem(pos, false)
                 }
             }
         })
 
-        // ==================== Пейджер → карусель ====================
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) = updatePageUI(position)
         })
@@ -138,8 +132,6 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         }
     }
 
-    // ==================== Центрирование ====================
-
     private fun setupCarouselPadding() {
         if (thumbsRecycler.width == 0) return
         val density = resources.displayMetrics.density
@@ -149,13 +141,11 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         thumbsRecycler.clipToPadding = false
     }
 
-    /** ПЛАВНО ставит миниатюру ровно по центру (без рывков). */
     private fun centerThumbSmooth(position: Int) {
         val lm = thumbsRecycler.layoutManager as? LinearLayoutManager ?: return
         programmaticThumbsScroll = true
         val view = lm.findViewByPosition(position)
         if (view == null) {
-            // элемент далеко — мгновенно подводим и центруем на следующем layout
             centerThumbImmediate(position)
             thumbsRecycler.post { centerThumbSmooth(position) }
             return
@@ -166,14 +156,12 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         if (dx != 0) thumbsRecycler.smoothScrollBy(dx, 0)
     }
 
-    /** Мгновенное центрирование (только при первом открытии). */
     private fun centerThumbImmediate(position: Int) {
         programmaticThumbsScroll = true
         val lm = thumbsRecycler.layoutManager as? LinearLayoutManager ?: return
         lm.scrollToPositionWithOffset(position, thumbsRecycler.paddingStart)
     }
 
-    // ==================== Выделение ====================
     private fun isImageSelected(f: WebDavRepository.FileInfo): Boolean {
         val state = browserVM.state.value ?: return false
         val idx = state.files.indexOfFirst { it.path == f.path }
@@ -186,7 +174,6 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         if (idx >= 0) browserVM.toggleSelection(idx)
     }
 
-    // ==================== UI ====================
     private fun centerThumbPosition(): Int {
         val centerX = thumbsRecycler.width / 2f
         var bestDist = Float.MAX_VALUE
@@ -206,9 +193,7 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         val f = images.getOrNull(position) ?: return
         tvCounter.text = "${position + 1} / ${images.size}"
         tvFileName.text = f.name
-        // ИСПРАВЛЕНО: точечное обновление рамки вместо notifyDataSetChanged (убирает дёргание)
         thumbsAdapter.setCurrent(position)
-        // ИСПРАВЛЕНО: плавное центрирование, только если карусель не тянет пользователь
         if (!userScrolledThumbs) centerThumbSmooth(position)
         updateSelectionIndicators()
     }
@@ -216,11 +201,9 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
     private fun updateSelectionIndicators() {
         val f = images.getOrNull(pager.currentItem) ?: return
         badgeSelected.visibility = if (isImageSelected(f)) View.VISIBLE else View.GONE
-        // ИСПРАВЛЕНО: точечно обновляем только текущую миниатюру (галочка ✓)
         thumbsAdapter.notifyItemChanged(pager.currentItem)
     }
 
-    // ==================== Адаптер пейджера ====================
     private inner class PagerAdapter : RecyclerView.Adapter<PagerAdapter.VH>() {
         inner class VH(root: FrameLayout) : RecyclerView.ViewHolder(root) {
             val iv: ImageView = root.findViewById(R.id.ivFull)
@@ -236,19 +219,23 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             val f = images[position]
             holder.pb.visibility = View.VISIBLE
             holder.iv.load(WebDavImages.url(server, f.path)) {
+                // ✅ addHeader() работает напрямую
                 addHeader("Authorization", WebDavImages.basicHeader(user, pass))
                 memoryCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_report_image)
-                crossfade(true)
-                listener(object : coil.request.ImageRequest.Listener {
-                    override fun onSuccess(request: coil.request.ImageRequest, result: coil.request.SuccessResult) {
+                // ✅ placeholder через ContextCompat.getDrawable
+                placeholder(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery))
+                error(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_report_image))
+                // ✅ crossfade убран - настроен глобально
+                listener(object : ImageRequest.Listener {
+                    override fun onStart(request: ImageRequest) {}
+                    override fun onSuccess(request: ImageRequest, result: coil3.request.SuccessResult) {
                         holder.pb.visibility = View.GONE
                     }
-                    override fun onError(request: coil.request.ImageRequest, result: coil.request.ErrorResult) {
+                    override fun onError(request: ImageRequest, result: coil3.request.ErrorResult) {
                         holder.pb.visibility = View.GONE
                     }
+                    override fun onCancel(request: ImageRequest) {}
                 })
             }
             holder.iv.setOnClickListener { toggleSelectionFor(f) }
@@ -257,11 +244,9 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         override fun getItemCount(): Int = images.size
     }
 
-    // ==================== Адаптер карусели ====================
     private inner class ThumbAdapter : RecyclerView.Adapter<ThumbAdapter.VH>() {
         private var current = -1
 
-        // ИСПРАВЛЕНО: перерисовываем только старую и новую миниатюры
         fun setCurrent(pos: Int) {
             val old = current
             current = pos
@@ -283,13 +268,14 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             val f = images[position]
 
             holder.iv.load(WebDavImages.url(server, f.path)) {
+                // ✅ addHeader() работает напрямую
                 addHeader("Authorization", WebDavImages.basicHeader(user, pass))
                 memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 size(240)
-                crossfade(true)
-                placeholder(android.R.drawable.ic_menu_gallery)
-                error(android.R.drawable.ic_menu_report_image)
+                // ✅ placeholder через ContextCompat.getDrawable
+                placeholder(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery))
+                error(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_report_image))
             }
 
             holder.check.visibility = if (isImageSelected(f)) View.VISIBLE else View.GONE

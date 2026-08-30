@@ -8,6 +8,7 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.transition.CrossfadeTransition
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
@@ -31,22 +32,25 @@ class BackupApplication : Application(), Configuration.Provider, SingletonImageL
             Timber.d("Timber initialized in RELEASE mode")
         }
     }
+
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
             .setMinimumLoggingLevel(if (BuildConfig.DEBUG) android.util.Log.DEBUG else android.util.Log.INFO)
             .build()
+
     override fun newImageLoader(context: PlatformContext): ImageLoader {
         return ImageLoader.Builder(context)
             .components {
                 add(OkHttpNetworkFetcherFactory(WebDavClient.httpClient))
+                // ✅ Crossfade через Transition.Factory
+                add(CrossfadeTransition.Factory())
             }
             .memoryCache {
-                MemoryCache.Builder()
-                    .maxSizePercent(context, 0.25)
+                MemoryCache.Builder(context)
+                    .maxSizePercent(0.25)
                     .build()
             }
-            .crossfade(true)
             .build()
     }
 }

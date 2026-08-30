@@ -1,9 +1,9 @@
 package com.rezerv.upload
 
 import android.content.Context
-import coil.imageLoader
-import coil.request.ImageRequest
-import coil.target.Target
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.target.Target
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,19 +18,23 @@ object CoilPrefetch {
             .filter { !it.isDirectory && FileUtils.isImageFile(it.name) }
             .take(limit).toList()
         if (images.isEmpty()) return
+
         val app = context.applicationContext
+        val imageLoader = SingletonImageLoader.get(app)
+
         images.chunked(6).forEach { batch ->
             scope.launch {
                 batch.forEach { f ->
                     val req = ImageRequest.Builder(app)
                         .data(WebDavImages.url(server, f.path))
+                        // ✅ addHeader() работает напрямую
                         .addHeader("Authorization", WebDavImages.basicHeader(user, pass))
                         .memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                         .diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                         .size(96)
                         .target(object : Target {})
                         .build()
-                    app.imageLoader.execute(req)
+                    imageLoader.enqueue(req)
                 }
             }
         }

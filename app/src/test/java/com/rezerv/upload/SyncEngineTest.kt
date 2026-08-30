@@ -1,13 +1,5 @@
 package com.rezerv.upload
 
-import kotlinx.coroutines.runBlocking
-import org.junit.Assert.*
-import org.junit.Before
-import org.junit.Test
-import org.mockito.Mock
-import org.mockito.MockitoAnnotations
-import org.mockito.kotlin.*
-
 class SyncEngineTest {
 
     @Mock

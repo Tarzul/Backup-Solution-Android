@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <!-- Подпапка cache/videos используется для скачивания видео перед открытием
-         через ACTION_VIEW во внешнем плеере -->
-    <cache-path name="videos" path="videos/" />
-</paths>

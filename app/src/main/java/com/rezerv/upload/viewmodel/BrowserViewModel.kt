@@ -67,6 +67,9 @@ class BrowserViewModel @Inject constructor(
     private val _log = MutableLiveData("")
     val log: LiveData<String> = _log
 
+    private val logLock = Any()
+    private var logBuffer = ""
+
     private var rangeBase: Set<Int> = emptySet()
     private var rangeModeAdd = true
     private val uploadSemaphore = Semaphore(MAX_PARALLEL_UPLOADS)
@@ -80,20 +83,20 @@ class BrowserViewModel @Inject constructor(
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             appendLog("📋 Получение списка: $path")
-            _state.value = _state.value?.copy(isLoading = true)
+            _state.postValue(_state.value?.copy(isLoading = true))
 
             val files = webDavService.listFiles(base, path, user, pass)
             val sorted = files.sortedWith(
                 compareBy<WebDavRepository.FileInfo> { !it.isDirectory }.thenBy { it.name }
             )
 
-            _state.value = _state.value?.copy(
+            _state.postValue(_state.value?.copy(
                 currentPath = path,
                 files = sorted,
                 isLoading = false,
                 selectionMode = false,
                 selectedIndices = emptySet()
-            )
+            ))
 
             appendLog("✓ Элементов: ${sorted.size}")
             CoilPrefetch.prefetch(getApplication(), server, user, pass, sorted)
@@ -105,7 +108,7 @@ class BrowserViewModel @Inject constructor(
         val root = WebDavRepository.getServerPath(server)
 
         if (currentPath == root || currentPath == "/") {
-            _events.value = BrowserEvent.ShowToast("Уже в корне")
+            _events.postValue(BrowserEvent.ShowToast("Уже в корне"))
             return
         }
 
@@ -126,24 +129,24 @@ class BrowserViewModel @Inject constructor(
         val state = _state.value ?: return
         val selected = state.selectedIndices.toMutableSet()
         if (selected.contains(index)) selected.remove(index) else selected.add(index)
-        _state.value = state.copy(
+        _state.postValue(state.copy(
             selectedIndices = selected,
             selectionMode = selected.isNotEmpty()
-        )
+        ))
     }
 
     fun startSelectionMode(index: Int) {
-        _state.value = _state.value?.copy(
+        _state.postValue(_state.value?.copy(
             selectionMode = true,
             selectedIndices = setOf(index)
-        )
+        ))
     }
 
     fun exitSelectionMode() {
-        _state.value = _state.value?.copy(
+        _state.postValue(_state.value?.copy(
             selectionMode = false,
             selectedIndices = emptySet()
-        )
+        ))
     }
 
     fun beginRangeSelection(anchor: Int, forceAdd: Boolean) {
@@ -161,10 +164,10 @@ class BrowserViewModel @Inject constructor(
         } else {
             for (i in lo..hi) sel.remove(i)
         }
-        _state.value = _state.value?.copy(
+        _state.postValue(_state.value?.copy(
             selectedIndices = sel,
             selectionMode = sel.isNotEmpty()
-        )
+        ))
     }
 
     fun getSelectedCount(): Int = _state.value?.selectedIndices?.size ?: 0
@@ -188,7 +191,7 @@ class BrowserViewModel @Inject constructor(
         val index = images.indexOfFirst { it.path == item.path }
         if (index >= 0) {
             setPagerImages(images)
-            _events.value = BrowserEvent.OpenImagePager(index)
+            _events.postValue(BrowserEvent.OpenImagePager(index))
         }
     }
 
@@ -219,7 +222,7 @@ class BrowserViewModel @Inject constructor(
                 }
             }
 
-            _events.value = BrowserEvent.ShowToast("Удалено: $successCount, ошибок: $errorCount")
+            _events.postValue(BrowserEvent.ShowToast("Удалено: $successCount, ошибок: $errorCount"))
             browseServer(server, state.currentPath, user, pass)
         }
     }
@@ -251,7 +254,7 @@ class BrowserViewModel @Inject constructor(
                 }
             }
 
-            _events.value = BrowserEvent.ShowToast("Скачано: $successCount, ошибок: $errorCount")
+            _events.postValue(BrowserEvent.ShowToast("Скачано: $successCount, ошибок: $errorCount"))
         }
     }
 
@@ -269,19 +272,19 @@ class BrowserViewModel @Inject constructor(
                 // Callback прогресса — вызывается каждые 500 мс из Repository
                 val now = System.currentTimeMillis()
                 val elapsed = now - lastTime
-            
+
                 if (elapsed >= 1000) {
                     val bytesPerSecond = ((bytesDownloaded - lastBytes) * 1000.0 / elapsed).toLong()
                     val speedMB = bytesPerSecond / 1048576.0
-                
+
                     val speedText = if (speedMB >= 1.0) {
                         String.format("%.1f МБ/с", speedMB)
                     } else {
                         "${bytesPerSecond / 1024} КБ/с"
                     }
-                
+
                     appendLog("📥 ${FileUtils.formatSize(bytesDownloaded)} ($speedText)")
-                
+
                     lastBytes = bytesDownloaded
                     lastTime = now
                 }
@@ -290,15 +293,15 @@ class BrowserViewModel @Inject constructor(
             when (result) {
                 is WebDavRepository.DownloadResult.Success -> {
                     appendLog("✓ Скачано: $fileName (${FileUtils.formatSize(result.bytesDownloaded)})")
-                    _events.value = BrowserEvent.ShowToast("Скачано: $fileName")
+                    _events.postValue(BrowserEvent.ShowToast("Скачано: $fileName"))
                 }
                 is WebDavRepository.DownloadResult.HttpError -> {
                     appendLog("✗ $fileName: HTTP ${result.code}")
-                    _events.value = BrowserEvent.ShowToast("Ошибка HTTP ${result.code}")
+                    _events.postValue(BrowserEvent.ShowToast("Ошибка HTTP ${result.code}"))
                 }
                 is WebDavRepository.DownloadResult.IoError -> {
                     appendLog("✗ $fileName: ${result.message}")
-                    _events.value = BrowserEvent.ShowToast("Ошибка: ${result.message}")
+                    _events.postValue(BrowserEvent.ShowToast("Ошибка: ${result.message}"))
                 }
             }
         }
@@ -316,12 +319,12 @@ class BrowserViewModel @Inject constructor(
             when (result) {
                 is WebDavResult.Success -> {
                     appendLog("✓ Папка создана: $folderName")
-                    _events.value = BrowserEvent.ShowToast("Папка создана")
+                    _events.postValue(BrowserEvent.ShowToast("Папка создана"))
                     browseServer(server, state.currentPath, user, pass)
                 }
                 else -> {
                     appendLog("✗ Ошибка создания папки: ${result.errorMessage()}")
-                    _events.value = BrowserEvent.ShowToast("Ошибка: ${result.errorMessage()}")
+                    _events.postValue(BrowserEvent.ShowToast("Ошибка: ${result.errorMessage()}"))
                 }
             }
         }
@@ -336,7 +339,7 @@ class BrowserViewModel @Inject constructor(
         appendLog("=== Загрузка ${uris.size} файлов (параллельно: $MAX_PARALLEL_UPLOADS) ===")
 
         if (uris.isEmpty()) {
-            _events.value = BrowserEvent.ShowToast("Нет файлов для загрузки")
+            _events.postValue(BrowserEvent.ShowToast("Нет файлов для загрузки"))
             return
         }
 
@@ -344,7 +347,7 @@ class BrowserViewModel @Inject constructor(
             val base = WebDavRepository.normalizeBaseUrl(server)
             if (base == null) {
                 appendLog("✗ Неверный адрес сервера")
-                _events.value = BrowserEvent.ShowToast("Ошибка: неверный адрес сервера")
+                _events.postValue(BrowserEvent.ShowToast("Ошибка: неверный адрес сервера"))
                 return@launch
             }
 
@@ -432,14 +435,14 @@ class BrowserViewModel @Inject constructor(
             ))
 
             appendLog("✓ Завершено: $success / $total")
-            _events.value = BrowserEvent.UploadCompleted(success, total)
+            _events.postValue(BrowserEvent.UploadCompleted(success, total))
             browseServer(server, _state.value?.currentPath ?: "/", user, pass)
         }
     }
 
     fun viewVideo(context: Context, item: WebDavRepository.FileInfo) {
         viewModelScope.launch {
-            _events.value = BrowserEvent.ShowToast("Скачивание видео: ${item.name}")
+            _events.postValue(BrowserEvent.ShowToast("Скачивание видео: ${item.name}"))
             val file = withContext(Dispatchers.IO) {
                 try {
                     val (s, u, p) = settingsRepo.loadCredentials(getApplication())
@@ -461,9 +464,9 @@ class BrowserViewModel @Inject constructor(
                         .setDataAndType(uri, "video/*")
                         .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
                 } catch (e: Exception) {
-                    _events.value = BrowserEvent.ShowToast("Нет приложения для просмотра видео")
+                    _events.postValue(BrowserEvent.ShowToast("Нет приложения для просмотра видео"))
                 }
-            } else _events.value = BrowserEvent.ShowToast("Не удалось скачать видео")
+            } else _events.postValue(BrowserEvent.ShowToast("Не удалось скачать видео"))
         }
     }
 
@@ -472,9 +475,14 @@ class BrowserViewModel @Inject constructor(
     fun log(message: String) = appendLog(message)
 
     private fun appendLog(message: String) {
-        val current = _log.value ?: ""
-        val newLog = current + message + "\n"
-        _log.value = if (newLog.length > 20000) newLog.takeLast(20000) else newLog
+        val newLog = synchronized(logLock) {
+            logBuffer += message + "\n"
+            if (logBuffer.length > 20000) {
+                logBuffer = logBuffer.takeLast(20000)
+            }
+            logBuffer
+        }
+        _log.postValue(newLog)  // ✅ ОБЯЗАТЕЛЬНО postValue, не value!
     }
 
     private fun filesToJson(list: List<SyncFileDetail>): String {

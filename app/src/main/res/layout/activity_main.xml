@@ -308,21 +308,12 @@
     </LinearLayout>
 
     <!-- ==================== Вкладка 3: Задания (COMPOSE) ==================== -->
-    <ScrollView
+    <androidx.compose.ui.platform.ComposeView
         android:id="@+id/tabTasks"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:fillViewport="true"
-        android:visibility="gone">
-
-        <!-- ✅ НОВЫЙ Compose контейнер (заменяет старый tasksContainer) -->
-        <androidx.compose.ui.platform.ComposeView
-            android:id="@+id/tasksComposeView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-
-    </ScrollView>
+        android:visibility="gone" />
 
     <!-- ==================== Вкладка 4: История ==================== -->
     <ScrollView

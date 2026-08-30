@@ -34,6 +34,7 @@ fun TasksTab(
         when (val currentTasks = tasks) {
             null -> {
                 LazyColumn(
+                    modifier = Modifier.fillMaxSize(),  // ✅ ДОБАВИТЬ
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -45,6 +46,7 @@ fun TasksTab(
                     EmptyTasksState(onCreateTask = onCreateTask)
                 } else {
                     LazyColumn(
+                        modifier = Modifier.fillMaxSize(),  // ✅ ДОБАВИТЬ
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {

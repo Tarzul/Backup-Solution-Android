@@ -52,7 +52,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTabHistory: Button
     private lateinit var tabConnection: ScrollView
     private lateinit var tabBrowser: View
-    private lateinit var tabTasks: ScrollView
     private lateinit var tabHistory: ScrollView
 
     // Подключение
@@ -80,7 +79,8 @@ class MainActivity : AppCompatActivity() {
     // Skeleton screens
     private lateinit var skeletonFiles: View
     private lateinit var skeletonHistory: LinearLayout
-    private lateinit var tasksComposeView: ComposeView
+
+    private lateinit var tabTasks: ComposeView
 
     private var picked: List<Uri> = emptyList()
     private lateinit var fileAdapter: FileRecyclerViewAdapter
@@ -238,7 +238,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshTasks(tasks: List<SyncTask>) {
-        tasksComposeView.setContent {
+        tabTasks.setContent {
             RezervTheme {
                 TasksTab(
                     onTaskClick = { taskId: String ->
@@ -325,7 +325,6 @@ class MainActivity : AppCompatActivity() {
         btnClearHistory = findViewById(R.id.btnClearHistory)
         skeletonFiles = findViewById(R.id.skeletonFiles)
         skeletonHistory = findViewById(R.id.skeletonHistory)
-        tasksComposeView = findViewById(R.id.tasksComposeView)
 
         rvFiles.layoutManager = LinearLayoutManager(this)
         rvFiles.itemAnimator = null

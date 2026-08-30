@@ -5,20 +5,22 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
+import com.rezerv.upload.SyncEngine
 import com.rezerv.upload.SyncTask
-import com.rezerv.upload.TaskWorker
-import com.rezerv.upload.CircularLogBuffer
 import com.rezerv.upload.data.HistoryRepository
 import com.rezerv.upload.data.SyncScheduler
 import com.rezerv.upload.data.TaskRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 @HiltViewModel
 class TasksViewModel @Inject constructor(
@@ -41,9 +43,11 @@ class TasksViewModel @Inject constructor(
     private val _events = MutableLiveData<TaskEvent>()
     val events: LiveData<TaskEvent> = _events
 
-    private val logBuffer = CircularLogBuffer()
     private val _log = MutableLiveData("")
     val log: LiveData<String> = _log
+
+    private val _isRunning = MutableLiveData(false)
+    val isRunning: LiveData<Boolean> = _isRunning
 
     fun deleteTask(task: SyncTask) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -59,27 +63,57 @@ class TasksViewModel @Inject constructor(
 
     fun runTaskNow(task: SyncTask) {
         viewModelScope.launch {
-            val records = historyRepo.getRecords(getApplication())
-            if (records.any { it.status == "running" && it.taskId == task.id }) {
+            val startTime = System.currentTimeMillis()
+
+            if (!historyRepo.createLiveRecord(
+                    getApplication(), startTime, task.name, "user", task.id)) {
                 _events.value = TaskEvent.ShowToast("Задание уже выполняется")
                 return@launch
             }
-            val request = androidx.work.OneTimeWorkRequestBuilder<TaskWorker>()
-                .setInputData(androidx.work.workDataOf("taskId" to task.id))
-                .addTag("sync_task")
-                .addTag("task_${task.id}")
-                .build()
-            androidx.work.WorkManager.getInstance(getApplication()).enqueue(request)
 
+            _isRunning.value = true
             _events.value = TaskEvent.TaskStarted(task.name)
-            appendLog("▶ Запуск: ${task.name} (WorkManager)")
+            appendLog("▶ Запуск: ${task.name}")
+
+            val ticker = viewModelScope.launch {
+                while (isActive) {
+                    delay(1000)
+                }
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                SyncEngine.runTask(
+                    getApplication(), task, trigger = "user",
+                    startTime = startTime,
+                    onProgress = { m -> appendLog(m) },
+                    onLiveUpdate = { name, idx, total ->
+                        historyRepo.updateLiveRecord(getApplication(), startTime, name, idx, total)
+                    }
+                )
+            }
+
+            ticker.cancel()
+            _isRunning.value = false
+
+            val updated = task.copy(
+                lastRun = System.currentTimeMillis(),
+                lastStatus = if (result.errors == 0) "ok" else "error"
+            )
+            withContext(Dispatchers.IO) {
+                taskRepo.saveTask(updated)
+            }
+            syncScheduler.scheduleNext(getApplication())
+
+            _events.value = TaskEvent.TaskCompleted(task.name, result.errors)
+            appendLog("■ Завершено: ${task.name} (ошибок: ${result.errors})")
         }
     }
 
     fun log(message: String) = appendLog(message)
 
     private fun appendLog(message: String) {
-        logBuffer.add(message)
-        _log.postValue(logBuffer.getText())
+        val current = _log.value ?: ""
+        val newLog = current + message + "\n"
+        _log.value = if (newLog.length > 20000) newLog.takeLast(20000) else newLog
     }
 }

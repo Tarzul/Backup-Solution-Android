@@ -5,6 +5,8 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.*
+import kotlin.coroutines.coroutineContext
+import com.rezerv.upload.utils.ProgressThrottler
 
 object SyncEngine {
     private const val TAG = "SyncEngine"
@@ -34,6 +36,10 @@ object SyncEngine {
         val lastModified: Long = 0L
     )
 
+    /**
+     * ИСПРАВЛЕНО: suspend-функция вместо блокирующей.
+     * Вызывается из coroutine scope (TaskWorker, MainViewModel).
+     */
     suspend fun runTask(
         context: Context,
         task: SyncTask,
@@ -41,35 +47,6 @@ object SyncEngine {
         startTime: Long = System.currentTimeMillis(),
         onProgress: ((String) -> Unit)? = null,
         onLiveUpdate: ((String, Int, Int) -> Unit)? = null
-    ): SyncResult {
-        return try {
-            runTaskInternal(context, task, trigger, startTime, onProgress, onLiveUpdate)
-        } catch (ce: kotlinx.coroutines.CancellationException) {
-            throw ce
-        } catch (t: Throwable) {
-            Log.e(TAG, "💥 FATAL in runTask '${task.name}'", t)
-            try {
-                val safeMsg = "${t.javaClass.simpleName}: ${t.message}".replace("\"", "'")
-                HistoryManager.finalizeRecord(context, HistoryRecord(
-                    time = startTime,
-                    durationMs = System.currentTimeMillis() - startTime,
-                    checked = 0, uploaded = 0, downloaded = 0, deleted = 0,
-                    errors = 1, status = "error", trigger = trigger,
-                    errorsJson = """[{"n":"💥 Crash","r":"$safeMsg"}]""",
-                    taskName = task.name, taskId = task.id
-                ))
-            } catch (ignore: Exception) { }
-            SyncResult(0, 0, 0, 1, System.currentTimeMillis() - startTime)
-        }
-    }
-
-    private suspend fun runTaskInternal(
-        context: Context,
-        task: SyncTask,
-        trigger: String,
-        startTime: Long,
-        onProgress: ((String) -> Unit)?,
-        onLiveUpdate: ((String, Int, Int) -> Unit)?
     ): SyncResult = withContext(Dispatchers.IO) {
 
         val progress: (String) -> Unit = { m -> onProgress?.invoke(m) }
@@ -110,7 +87,7 @@ object SyncEngine {
         // 3. NetworkRequest (Привязка процесса к активной сети)
         var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-
+        
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             val request = android.net.NetworkRequest.Builder()
                 .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -120,34 +97,14 @@ object SyncEngine {
 
             networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
-                    // ✅ Защищаем bind — даже без permission синк продолжит работать
-                    try {
-                        connectivityManager.bindProcessToNetwork(network)
-                        Log.d(TAG, "✅ Network bound for sync")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "bindProcessToNetwork недоступен, работаем без привязки", e)
-                    }
+                    Log.d(TAG, "✅ Network bound for sync")
+                    connectivityManager.bindProcessToNetwork(network)
                 }
                 override fun onLost(network: android.net.Network) {
                     Log.w(TAG, "⚠️ Network lost during sync")
                 }
             }
-
-            // ✅ requestNetwork требует CHANGE_NETWORK_STATE — fallback на listen-only режим
-            try {
-                connectivityManager.requestNetwork(request, networkCallback)
-            } catch (e: SecurityException) {
-                Log.w(TAG, "requestNetwork отклонён (нет CHANGE_NETWORK_STATE), fallback: registerNetworkCallback", e)
-                try {
-                    connectivityManager.registerNetworkCallback(request, networkCallback)
-                } catch (e2: Exception) {
-                    Log.w(TAG, "registerNetworkCallback тоже недоступен", e2)
-                    networkCallback = null
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "NetworkRequest не удался, продолжаем без него", e)
-                networkCallback = null
-            }
+            connectivityManager.requestNetwork(request, networkCallback)
         }
 
         // ==================== MAIN LOGIC ====================
@@ -302,13 +259,26 @@ object SyncEngine {
                     res.errors++
                     res.errorList.add(SyncErrorDetail(name, "не удалось открыть"))
                 } else {
+                    // ✅ Получаем CoroutineScope из suspend-контекста
+                    val scope = CoroutineScope(coroutineContext)
+                    
                     input.use {
+                        val throttledProgress = ProgressThrottler(
+                            scope = scope,  // ✅ Передаем правильный scope
+                            onUpdate = { written, total ->
+                                live(name, written.toInt(), total.toInt())
+                            }
+                        )
+
                         val code = WebDavClient.put(
                             url = server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name),
                             user = user,
                             pass = pass,
                             inputStream = it,
-                            fileSize = f.length()
+                            fileSize = f.length(),
+                            onProgress = { written, total ->
+                                throttledProgress.emit(written, total)
+                            }
                         )
 
                         if (code in 200..299) {
@@ -389,12 +359,24 @@ object SyncEngine {
                     continue
                 }
 
+                val scope = CoroutineScope(coroutineContext)
+                
+                val throttledProgress = ProgressThrottler(
+                    scope = scope,
+                    onUpdate = { written, total ->
+                        live(e.name, written.toInt(), total.toInt())
+                    }
+                )
+
                 val downloadResult = context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
                     WebDavClient.downloadStreaming(
                         url = server + WebDavRepository.encodePath(remote),
                         user = user,
                         pass = pass,
-                        outputStream = out
+                        outputStream = out,
+                        onProgress = { written, total ->
+                            throttledProgress.emit(written, total)
+                        }
                     )
                 } ?: Result.failure(java.io.IOException("Не удалось открыть OutputStream"))
 

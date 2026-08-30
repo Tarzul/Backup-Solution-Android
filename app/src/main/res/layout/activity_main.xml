@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/background_dark">
+
+    <!-- ==================== Вкладка 1: Подключение ==================== -->
+    <ScrollView
+        android:id="@+id/tabConnection"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:visibility="visible">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Адрес WebDAV-сервера"
+                android:textColor="@color/text_secondary"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/etServer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="https://server.com/webdav/"
+                android:inputType="textUri|textNoSuggestions"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/hint_gray"
+                android:background="@drawable/bg_input_dark"
+                android:padding="12dp"
+                android:layout_marginTop="4dp"
+                android:importantForAutofill="no"
+                android:maxLength="500"
+                android:maxLines="1"
+                android:imeOptions="actionNext"
+                android:singleLine="true" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Логин"
+                android:textColor="@color/text_secondary"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/etUser"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="user"
+                android:inputType="text|textNoSuggestions"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/hint_gray"
+                android:background="@drawable/bg_input_dark"
+                android:padding="12dp"
+                android:layout_marginTop="4dp"
+                android:importantForAutofill="no"
+                android:maxLength="200"
+                android:maxLines="1"
+                android:imeOptions="actionNext"
+                android:singleLine="true" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Пароль"
+                android:textColor="@color/text_secondary"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/etPass"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="••••••••"
+                android:inputType="textPassword"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/hint_gray"
+                android:background="@drawable/bg_input_dark"
+                android:padding="12dp"
+                android:layout_marginTop="4dp"
+                android:importantForAutofill="no"
+                android:maxLength="500"
+                android:maxLines="1"
+                android:imeOptions="actionDone"
+                android:singleLine="true" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Тип аутентификации"
+                android:textColor="@color/text_secondary"
+                android:textStyle="bold" />
+
+            <Spinner
+                android:id="@+id/spAuth"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_input_dark"
+                android:popupBackground="@color/surface_dark"
+                android:layout_marginTop="4dp" />
+
+            <Button
+                android:id="@+id/btnConnect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="🔌 Подключиться"
+                android:background="@drawable/bg_button_primary"
+                android:textColor="@color/black"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="Журнал"
+                android:textColor="@color/text_secondary"
+                android:textStyle="bold" />
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="260dp"
+                android:background="@drawable/bg_rounded_dark"
+                android:padding="12dp"
+                android:layout_marginTop="4dp"
+                android:fillViewport="true">
+
+                <TextView
+                    android:id="@+id/tvLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textSize="12sp"
+                    android:textColor="@color/log_green"
+                    android:textIsSelectable="true" />
+            </ScrollView>
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ==================== Вкладка 2: Файлы ==================== -->
+    <LinearLayout
+        android:id="@+id/tabBrowser"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <Button
+                android:id="@+id/btnPick"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Выбрать файлы"
+                android:background="@drawable/bg_button_secondary"
+                android:textColor="@color/text_secondary" />
+            <Button
+                android:id="@+id/btnUpload"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:text="Загрузить"
+                android:background="@drawable/bg_button_primary"
+                android:textColor="@color/black"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="12dp">
+            <Button
+                android:id="@+id/btnBack"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:text="←"
+                android:background="@drawable/bg_button_secondary"
+                android:textColor="@color/text_secondary"
+                android:contentDescription="Назад" />
+            <TextView
+                android:id="@+id/tvCurrentPath"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:text="Путь: /"
+                android:textColor="@color/text_secondary"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="middle" />
+            <Button
+                android:id="@+id/btnNewFolder"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:text="➕"
+                android:background="@drawable/bg_button_secondary"
+                android:textColor="@color/text_secondary"
+                android:contentDescription="Создать папку" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Клик — открыть, удержание — выбор, ведите палец — выбор диапазона"
+            android:textSize="11sp"
+            android:textColor="@color/hint_gray" />
+
+        <LinearLayout
+            android:id="@+id/llSelection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_rounded_dark"
+            android:padding="10dp"
+            android:layout_marginTop="8dp"
+            android:visibility="gone">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:id="@+id/tvSelectionCount"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Выбрано: 0"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold" />
+                <Button
+                    android:id="@+id/btnSelCancel"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:text="✕"
+                    android:background="@drawable/bg_button_secondary"
+                    android:textColor="@color/text_secondary"
+                    android:contentDescription="Отменить выбор" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+                <Button
+                    android:id="@+id/btnSelDownload"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="⬇ Скачать"
+                    android:background="@drawable/bg_button_primary"
+                    android:textColor="@color/black"
+                    android:contentDescription="Скачать выбранные" />
+                <Button
+                    android:id="@+id/btnSelDelete"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="6dp"
+                    android:text="🗑 Удалить"
+                    android:background="@drawable/bg_button_danger"
+                    android:textColor="@color/text_primary"
+                    android:contentDescription="Удалить выбранные" />
+            </LinearLayout>
+        </LinearLayout>
+
+                <!-- ✅ Skeleton для загрузки списка файлов -->
+        <include
+            android:id="@+id/skeletonFiles"
+            layout="@layout/skeleton_file_list"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvFiles"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_rounded_dark"
+            android:clipToPadding="false"
+            android:padding="4dp" />
+
+    </LinearLayout>
+
+    <!-- ==================== Вкладка 3: Задания ==================== -->
+    <ScrollView
+        android:id="@+id/tabTasks"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:visibility="gone">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+            <Button
+                android:id="@+id/btnCreateTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="➕ Создать задание"
+                android:background="@drawable/bg_button_primary"
+                android:textColor="@color/black"
+                android:textStyle="bold" />
+            <!-- ✅ Skeleton для заданий -->
+            <LinearLayout
+                android:id="@+id/skeletonTasks"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="12dp"
+                android:visibility="gone">
+                <include layout="@layout/skeleton_task_card" />
+                <include layout="@layout/skeleton_task_card" />
+                <include layout="@layout/skeleton_task_card" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/tasksContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="12dp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ==================== Вкладка 4: История ==================== -->
+    <ScrollView
+        android:id="@+id/tabHistory"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:visibility="gone">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="История синхронизаций"
+                    android:textColor="@color/text_primary"
+                    android:textStyle="bold"
+                    android:textSize="16sp" />
+                <Button
+                    android:id="@+id/btnClearHistory"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:text="🗑"
+                    android:background="@drawable/bg_button_secondary"
+                    android:textColor="@color/text_secondary"
+                    android:contentDescription="Очистить историю" />
+            </LinearLayout>
+            <com.rezerv.upload.HistoryChartView
+                android:id="@+id/historyChart"
+                android:layout_width="match_parent"
+                android:layout_height="180dp"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/bg_rounded_dark" />
+            <!-- ✅ Skeleton для истории -->
+            <LinearLayout
+                android:id="@+id/skeletonHistory"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="12dp"
+                android:visibility="gone">
+                <include layout="@layout/skeleton_history_card" />
+                <include layout="@layout/skeleton_history_card" />
+                <include layout="@layout/skeleton_history_card" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvHistoryEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:gravity="center"
+                android:text="История пуста"
+                android:textColor="@color/hint_gray" />
+            <LinearLayout
+                android:id="@+id/historyContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="12dp" />
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ==================== Панель вкладок (ВНИЗУ) ==================== -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="@drawable/bg_tab_bar"
+        android:padding="6dp">
+        <Button
+            android:id="@+id/btnTabConnection"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="🔌 Подкл."
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="12sp"
+            android:background="@drawable/bg_button_primary"
+            android:textColor="@color/black"
+            android:contentDescription="Вкладка Подключение" />
+        <Button
+            android:id="@+id/btnTabBrowser"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:text="📂 Файлы"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="12sp"
+            android:background="@drawable/bg_button_secondary"
+            android:textColor="@color/text_secondary"
+            android:contentDescription="Вкладка Файлы" />
+        <Button
+            android:id="@+id/btnTabTasks"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:text="📋 Задания"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="12sp"
+            android:background="@drawable/bg_button_secondary"
+            android:textColor="@color/text_secondary"
+            android:contentDescription="Вкладка Задания" />
+        <Button
+            android:id="@+id/btnTabHistory"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:text="🕘 История"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="12sp"
+            android:background="@drawable/bg_button_secondary"
+            android:textColor="@color/text_secondary"
+            android:contentDescription="Вкладка История" />
+    </LinearLayout>
+</LinearLayout>

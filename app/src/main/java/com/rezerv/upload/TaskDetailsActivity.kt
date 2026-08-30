@@ -162,14 +162,40 @@ class TaskDetailsActivity : AppCompatActivity() {
 
     private fun runTaskNow() {
         val t = currentTask ?: return
-        val request = androidx.work.OneTimeWorkRequestBuilder<TaskWorker>()
-            .setInputData(androidx.work.workDataOf("taskId" to t.id))
-            .addTag("sync_task")
-            .addTag("task_${t.id}")
-            .build()
-        androidx.work.WorkManager.getInstance(this).enqueue(request)
-        Toast.makeText(this, "Запуск синхронизации...", Toast.LENGTH_SHORT).show()
-        finish()
+        lifecycleScope.launch {
+            val startTime = System.currentTimeMillis()
+            
+            HistoryManager.createLiveRecord(this@TaskDetailsActivity, startTime, t.name, "user", t.id)
+            
+            Toast.makeText(this@TaskDetailsActivity, "Запуск синхронизации...", Toast.LENGTH_SHORT).show()
+            
+            val result = withContext(Dispatchers.IO) {
+                SyncEngine.runTask(
+                    this@TaskDetailsActivity, 
+                    t, 
+                    trigger = "user",
+                    startTime = startTime,
+                    onProgress = { },
+                    onLiveUpdate = { fileName, fileIndex, totalFiles ->
+                        HistoryManager.updateLiveRecord(
+                            this@TaskDetailsActivity, startTime, fileName, fileIndex, totalFiles)
+                    }
+                )
+            }
+            
+            val updated = t.copy(
+                lastRun = System.currentTimeMillis(),
+                lastStatus = if (result.errors == 0) "ok" else "error")
+            withContext(Dispatchers.IO) { taskRepository.saveTask(updated) }
+            currentTask = updated
+            syncScheduler.scheduleNext(this@TaskDetailsActivity)
+            
+            Toast.makeText(this@TaskDetailsActivity,
+                if (result.errors == 0) "✓ Синхронизация завершена" else "✗ Завершено с ошибками: ${result.errors}",
+                Toast.LENGTH_SHORT).show()
+            
+            finish()
+        }
     }
 
     private fun copyTask() {

@@ -52,7 +52,7 @@ class HistoryViewModel @Inject constructor(  // ✅ @Inject обязателен
 
     fun startLiveUpdates() {
         if (_isLiveUpdating.value == true) return
-        _isLiveUpdating.postValue(true)
+        _isLiveUpdating.value = true
 
         liveUpdateJob?.cancel()
         liveUpdateJob = viewModelScope.launch {
@@ -66,7 +66,7 @@ class HistoryViewModel @Inject constructor(  // ✅ @Inject обязателен
     fun stopLiveUpdates() {
         liveUpdateJob?.cancel()
         liveUpdateJob = null
-        _isLiveUpdating.postValue(false)
+        _isLiveUpdating.value = false
         refreshHistory()
     }
 

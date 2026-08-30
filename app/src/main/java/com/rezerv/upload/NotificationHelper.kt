@@ -16,23 +16,21 @@ object NotificationHelper {
     private const val CHANNEL_NAME_SYNC = "Синхронизация"
     private const val NOTIFICATION_ID_SYNC = 1001
 
+    /**
+     * Создаёт ForegroundInfo для WorkManager.
+     * Вызывается из TaskWorker через setForeground().
+     */
     fun createForegroundInfo(
         context: Context,
         taskName: String,
-        taskId: String,
+        taskId: String,  // ✅ ДОБАВЛЕНО: для отмены конкретной задачи
         progress: Int,
         fileName: String? = null,
         isIndeterminate: Boolean = false
     ): ForegroundInfo {
         ensureChannel(context)
         val notification = buildSyncNotification(context, taskName, taskId, progress, fileName, isIndeterminate)
-        return ForegroundInfo(
-            NOTIFICATION_ID_SYNC,
-            notification,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            else 0
-        )
+        return ForegroundInfo(NOTIFICATION_ID_SYNC, notification)
     }
 
     private fun buildSyncNotification(

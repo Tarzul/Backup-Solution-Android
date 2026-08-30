@@ -6,7 +6,6 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.rezerv.upload.WebDavRepository
-import com.rezerv.upload.CircularLogBuffer
 import com.rezerv.upload.data.SettingsRepository
 import com.rezerv.upload.data.SyncScheduler
 import com.rezerv.upload.data.WebDavService
@@ -21,9 +20,9 @@ import javax.inject.Inject
 @HiltViewModel
 class ConnectionViewModel @Inject constructor(
     application: Application,
-    private val settingsRepo: SettingsRepository,
-    private val webDavService: WebDavService,
-    private val syncScheduler: SyncScheduler
+    private val settingsRepo: SettingsRepository,   // ✅ Внедрение
+    private val webDavService: WebDavService,       // ✅ Внедрение
+    private val syncScheduler: SyncScheduler        // ✅ Внедрение
 ) : AndroidViewModel(application) {
 
     data class ConnectionState(
@@ -45,7 +44,6 @@ class ConnectionViewModel @Inject constructor(
     private val _events = MutableLiveData<ConnectionEvent>()
     val events: LiveData<ConnectionEvent> = _events
 
-    private val logBuffer = CircularLogBuffer()
     private val _log = MutableLiveData("")
     val log: LiveData<String> = _log
 
@@ -71,14 +69,15 @@ class ConnectionViewModel @Inject constructor(
     // ==================== Подключение ====================
 
     fun connect(server: String, user: String, pass: String) {
-        logBuffer.clear()  // ✅ сброс лога перед новым подключением
         viewModelScope.launch {
             appendLog("🔌 Подключение к $server")
+            // ✅ Утилитарный метод — вызываем напрямую из object
             val base = WebDavRepository.normalizeBaseUrl(server)
             if (base == null) {
                 appendLog("✗ Неверный адрес сервера")
                 return@launch
             }
+
             _state.value = _state.value?.copy(isLoading = true, error = null)
             // ✅ Внедрённый сервис
             val result = webDavService.testConnection(base, user, pass)
@@ -116,7 +115,8 @@ class ConnectionViewModel @Inject constructor(
     fun log(message: String) = appendLog(message)
 
     private fun appendLog(message: String) {
-        logBuffer.add(message)
-        _log.postValue(logBuffer.getText())
+        val current = _log.value ?: ""
+        val newLog = current + message + "\n"
+        _log.value = if (newLog.length > 20000) newLog.takeLast(20000) else newLog
     }
 }

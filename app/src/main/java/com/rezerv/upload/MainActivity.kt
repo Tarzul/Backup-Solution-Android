@@ -34,9 +34,7 @@ import com.rezerv.upload.utils.Validators
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
     private val TAG = "MainActivity"
-private var isHistoryFirstLoad = true
-private var seenRunning = false
-private var liveStartTs = 0L
+    private var isHistoryFirstLoad = true  
 
     // ✅ 4 ViewModel вместо одной
     private val connectionVM: ConnectionViewModel by viewModels()
@@ -132,7 +130,6 @@ private var liveStartTs = 0L
         setupListeners()
         loadSettings()
         observeViewModels()
-        showCrashBoxIfAny()
         connectionVM.ensureScheduler()
         requestMediaPermissions()
         requestNotifications()
@@ -190,10 +187,11 @@ private var liveStartTs = 0L
             }
         }
 
-    // TasksViewModel — задачи (Room Flow)
+    // TasksViewModel
     lifecycleScope.launch {
         tasksVM.tasks.collect { tasks ->
             if (tasks == null) {
+                // ✅ Ещё грузится — показываем skeleton
                 skeletonTasks.visibility = View.VISIBLE
                 tasksContainer.visibility = View.GONE
             } else {
@@ -202,42 +200,9 @@ private var liveStartTs = 0L
         }
     }
 
-    // ✅ НОВОЕ: TasksViewModel — события запуска синхронизации
-    tasksVM.events.observe(this) { event ->
-        when (event) {
-            is TasksViewModel.TaskEvent.ShowToast -> {
-                Toast.makeText(this, event.message, Toast.LENGTH_SHORT).show()
-            }
-            is TasksViewModel.TaskEvent.TaskStarted -> {
-                seenRunning = false
-                liveStartTs = System.currentTimeMillis()
-                switchToTab(3)
-                historyVM.startLiveUpdates()
-            }
-            is TasksViewModel.TaskEvent.TaskCompleted -> {
-                // Уже не используется — результат показывает Notification из TaskWorker
-            }
-        }
-    }
-
-    // HistoryViewModel — записи + умный автостоп тикера
-    historyVM.records.observe(this) { records ->
-        refreshHistory(records)
-        val running = records.any { it.status == "running" }
-        if (running) seenRunning = true
-
-        if (historyVM.isLiveUpdating.value == true) {
-            // ✅ Стоп ТОЛЬКО если: видели running и он исчез (завершился успешно или с ошибкой)
-            val finished = seenRunning && !running
-            // ✅ Или: Worker так и не стартовал за 15 секунд (ошибка запуска)
-            val timedOut = !seenRunning && System.currentTimeMillis() - liveStartTs > 15_000
-            if (finished || timedOut) {
-                historyVM.stopLiveUpdates()
-                seenRunning = false
-            }
-        }
-    } 
-}
+        // HistoryViewModel
+        historyVM.records.observe(this) { records -> refreshHistory(records) }
+    }   
 
     // ==================== UI Updates ====================
 
@@ -513,22 +478,7 @@ private var liveStartTs = 0L
             if (server.isBlank()) { browserVM.log("Ошибка: сервер не подключён"); return@setOnClickListener }
             if (picked.isEmpty()) { browserVM.log("Нет выбранных файлов"); return@setOnClickListener }
             showServerFolderPicker(server, user, pass) { targetPath ->
-                // ✅ Унифицировано: ручная загрузка идёт через WorkManager
-                val request = androidx.work.OneTimeWorkRequestBuilder<UploadWorker>()
-                    .setInputData(androidx.work.workDataOf(
-                        UploadWorker.KEY_URIS to picked.map { it.toString() }.toTypedArray(),
-                        UploadWorker.KEY_TARGET to targetPath
-                    ))
-                    .addTag("task_${UploadWorker.TASK_ID}")   // ✅ кнопка «Остановить» в уведомлении
-                    .build()
-                androidx.work.WorkManager.getInstance(this).enqueue(request)
-
-                picked = emptyList()
-                // ✅ Переключаемся на историю и запускаем live-тикер (как в заданиях)
-                seenRunning = false
-                liveStartTs = System.currentTimeMillis()
-                switchToTab(3)
-                historyVM.startLiveUpdates()
+                browserVM.uploadFilesToPath(server, user, pass, picked, targetPath)
             }
         }
 
@@ -621,17 +571,6 @@ private var liveStartTs = 0L
                 browserVM.log("Ошибка загрузки списка папок: ${e.message}")
             }
         }
-    }
-
-    private fun showCrashBoxIfAny() {
-        val prefs = getSharedPreferences("crash_box", MODE_PRIVATE)
-        val crash = prefs.getString("last_crash", null) ?: return
-        prefs.edit().remove("last_crash").commit()
-        AlertDialog.Builder(this)
-            .setTitle("💥 Краш")
-            .setMessage(crash.take(4000))
-            .setPositiveButton("OK", null)
-            .show()
     }
 
     // ==================== Tabs ====================

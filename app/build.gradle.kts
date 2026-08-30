@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.rezerv.upload"
-    compileSdk = 36  // Android 16
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.rezerv.upload"
@@ -126,7 +126,8 @@ dependencies {
     ksp("androidx.hilt:hilt-compiler:1.4.0")
 
     // ==================== Изображения ====================
-    implementation("io.coil-kt:coil:3.3.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
 
     // ==================== Отладка ====================
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")

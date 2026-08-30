@@ -21,6 +21,9 @@ class HistoryManagerTest {
     /** Свежие timestamp'ы, чтобы записи не попадали под stale-таймаут */
     private fun nextTime() = System.currentTimeMillis() + (++counter)
 
+    /** Старые timestamp'ы (31 минуту назад) для тестов orphan detection */
+    private fun staleTime() = System.currentTimeMillis() - 31 * 60 * 1000L
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -58,12 +61,15 @@ class HistoryManagerTest {
     // осиротевшая запись помечается error с диагностикой
     @Test
     fun orphanRecord_markedAsErrorWithDiagnostics() {
-        val t = nextTime()
+        val t = staleTime()  // ← Старое время (31 мин назад), чтобы timeout сработал
         HistoryManager.addRecord(context, HistoryRecord(
             time = t, durationMs = 0, checked = 0, uploaded = 0, downloaded = 0,
             deleted = 0, errors = 0, status = "running", trigger = "user",
-            liveStartedAt = t, liveLastUpdateAt = t
+            liveStartedAt = t  // ✅ БЕЗ liveLastUpdateAt
         ))
+        // Запускаем createLiveRecord чтобы запустить очистку stale-записей
+        HistoryManager.createLiveRecord(context, nextTime(), "Триггер", "user", "task-trigger")
+
         val r = HistoryManager.getRecords(context).first { it.time == t }
         assertEquals("error", r.status)
         assertTrue(r.errors >= 1)
@@ -73,13 +79,15 @@ class HistoryManagerTest {
     // осиротевшая запись с файлом содержит имя файла в причине
     @Test
     fun orphanRecordWithFile_containsFileNameInReason() {
-        val t = nextTime()
+        val t = staleTime()  // ← Старое время для активации timeout
         HistoryManager.addRecord(context, HistoryRecord(
             time = t, durationMs = 0, checked = 1, uploaded = 0, downloaded = 0,
             deleted = 0, errors = 0, status = "running", trigger = "user",
             currentFileName = "video.mp4",
-            liveStartedAt = t, liveLastUpdateAt = t
+            liveStartedAt = t  // ✅ БЕЗ liveLastUpdateAt
         ))
+        HistoryManager.createLiveRecord(context, nextTime(), "Триггер", "user", "task-trigger")
+
         val r = HistoryManager.getRecords(context).first { it.time == t }
         assertEquals("error", r.status)
         assertTrue(r.errorsJson.contains("прервано на файле: video.mp4"))

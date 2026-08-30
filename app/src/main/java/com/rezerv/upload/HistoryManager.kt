@@ -45,10 +45,6 @@ object HistoryManager {
 
     // ==================== Атомарные операции ====================
 
-    /**
-     * ИСПРАВЛЕНО: Полностью атомарная операция "проверка + добавление".
-     * Возвращает true если запись создана, false если задание уже выполняется.
-     */
     fun createLiveRecord(
         context: Context, time: Long, taskName: String, trigger: String, taskId: String = ""
     ): Boolean {
@@ -56,12 +52,32 @@ object HistoryManager {
             val prefs = getPrefs(context)
             val records = loadRecords(prefs).toMutableList()
 
-            // 1. Чистим "зависшие" running-записи
+// 1. Чистим "зависшие" running-записи
             val now = System.currentTimeMillis()
             var cleaned = false
             for (i in records.indices) {
                 if (records[i].status == "running" && now - records[i].liveStartedAt > LIVE_TIMEOUT_MS) {
-                    records[i] = records[i].copy(status = "error")
+                    val orphan = records[i]
+
+                    // ✅ Создаём диагностику для orphan-записи
+                    val reason = if (orphan.currentFileName.isNotEmpty()) {
+                        "прервано на файле: ${orphan.currentFileName}"
+                    } else {
+                        "процесс завершён преждевременно"
+                    }
+
+                    val errorJson = JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("n", "💥 Orphan")
+                            put("r", reason)
+                        })
+                    }.toString()
+
+                    records[i] = orphan.copy(
+                        status = "error",
+                        errors = orphan.errors + 1,
+                        errorsJson = errorJson
+                    )
                     cleaned = true
                 }
             }
@@ -82,14 +98,10 @@ object HistoryManager {
             ))
             if (records.size > MAX) records.removeAt(records.lastIndex)
             saveRecords(prefs, records)
-            return true  // ✅ Запись создана
+            return true
         }
     }
 
-    /**
-     * ИСПРАВЛЕНО: Обновление без создания дублей.
-     * Использует time как уникальный ключ.
-     */
     fun updateLiveRecord(
         context: Context, time: Long,
         currentFileName: String, currentFileIndex: Int, totalFiles: Int

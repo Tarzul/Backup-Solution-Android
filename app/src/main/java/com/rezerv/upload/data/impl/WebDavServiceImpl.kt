@@ -8,6 +8,9 @@ import com.rezerv.upload.data.WebDavService
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Реализация WebDavService — простое делегирование на object WebDavRepository.
+ */
 @Singleton
 class WebDavServiceImpl @Inject constructor() : WebDavService {
 

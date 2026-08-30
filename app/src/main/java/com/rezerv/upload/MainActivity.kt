@@ -28,6 +28,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.compose.ui.platform.ComposeView
+import com.rezerv.upload.ui.compose.TasksTab
+import com.rezerv.upload.ui.theme.RezervTheme
 
 import com.rezerv.upload.utils.Validators
 
@@ -68,9 +71,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var llSelection: LinearLayout
     private lateinit var tvSelectionCount: TextView
 
-    // Задания
-    private lateinit var tasksContainer: LinearLayout
-
     // История
     private lateinit var historyChart: HistoryChartView
     private lateinit var historyContainer: LinearLayout
@@ -79,8 +79,8 @@ class MainActivity : AppCompatActivity() {
 
     // Skeleton screens
     private lateinit var skeletonFiles: View
-    private lateinit var skeletonTasks: LinearLayout
     private lateinit var skeletonHistory: LinearLayout
+    private lateinit var tasksComposeView: ComposeView
 
     private var picked: List<Uri> = emptyList()
     private lateinit var fileAdapter: FileRecyclerViewAdapter
@@ -187,22 +187,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    // TasksViewModel
-    lifecycleScope.launch {
-        tasksVM.tasks.collect { tasks ->
-            if (tasks == null) {
-                // ✅ Ещё грузится — показываем skeleton
-                skeletonTasks.visibility = View.VISIBLE
-                tasksContainer.visibility = View.GONE
-            } else {
-                refreshTasks(tasks)
+// TasksViewModel
+        lifecycleScope.launch {
+            tasksVM.tasks.collect { tasks ->
+                if (tasks != null) {
+                    refreshTasks(tasks)
+                }
             }
         }
-    }
 
-        // HistoryViewModel
+// HistoryViewModel
         historyVM.records.observe(this) { records -> refreshHistory(records) }
-    }   
+    }
 
     // ==================== UI Updates ====================
 
@@ -242,40 +238,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshTasks(tasks: List<SyncTask>) {
-        // Плавное появление контента после skeleton
-        if (skeletonTasks.visibility == View.VISIBLE) {
-            tasksContainer.alpha = 0f
-            tasksContainer.visibility = View.VISIBLE
-            tasksContainer.animate()
-                .alpha(1f)
-                .setDuration(300)
-                .withEndAction { skeletonTasks.visibility = View.GONE }
-                .start()
-        } else {
-            tasksContainer.visibility = View.VISIBLE
-        }
-
-        tasksContainer.removeAllViews()
-        if (tasks.isEmpty()) {
-            tasksContainer.addView(TextView(this).apply {
-                text = "Нет заданий.\nНажмите «➕ Создать задание»."
-                setTextColor(0xFF888888.toInt())
-                gravity = android.view.Gravity.CENTER
-            })
-            return
-        }
-
-        val taskBuilder = TaskCardBuilder(this)
-        val listener = object : TaskCardBuilder.Listener {
-            override fun onRunTask(task: SyncTask) { tasksVM.runTaskNow(task) }
-            override fun onEditTask(task: SyncTask) {
-                startActivity(Intent(this@MainActivity, TaskDetailsActivity::class.java)
-                    .putExtra("taskId", task.id))
+        tasksComposeView.setContent {
+            RezervTheme {
+                TasksTab(
+                    onTaskClick = { taskId: String ->
+                        startActivity(Intent(this@MainActivity, TaskDetailsActivity::class.java)
+                            .putExtra("taskId", taskId))
+                    },
+                    onCreateTask = {
+                        startActivity(Intent(this@MainActivity, TaskWizardActivity::class.java))
+                    }
+                )
             }
-            override fun onDeleteTask(task: SyncTask) { tasksVM.deleteTask(task) }
         }
-
-        for (t in tasks) tasksContainer.addView(taskBuilder.build(t, listener))
     }
 
     private fun refreshHistory(records: List<HistoryRecord>) {
@@ -344,14 +319,13 @@ class MainActivity : AppCompatActivity() {
         btnNewFolder = findViewById(R.id.btnNewFolder)
         llSelection = findViewById(R.id.llSelection)
         tvSelectionCount = findViewById(R.id.tvSelectionCount)
-        tasksContainer = findViewById(R.id.tasksContainer)
         historyChart = findViewById(R.id.historyChart)
         historyContainer = findViewById(R.id.historyContainer)
         tvHistoryEmpty = findViewById(R.id.tvHistoryEmpty)
         btnClearHistory = findViewById(R.id.btnClearHistory)
         skeletonFiles = findViewById(R.id.skeletonFiles)
-        skeletonTasks = findViewById(R.id.skeletonTasks)
         skeletonHistory = findViewById(R.id.skeletonHistory)
+        tasksComposeView = findViewById(R.id.tasksComposeView)
 
         rvFiles.layoutManager = LinearLayoutManager(this)
         rvFiles.itemAnimator = null
@@ -385,10 +359,6 @@ class MainActivity : AppCompatActivity() {
         btnTabBrowser.setOnClickListener { switchToTab(1) }
         btnTabTasks.setOnClickListener { switchToTab(2) }
         btnTabHistory.setOnClickListener { switchToTab(3) }
-
-        findViewById<Button>(R.id.btnCreateTask).setOnClickListener {
-            startActivity(Intent(this, TaskWizardActivity::class.java))
-        }
 
         btnClearHistory.setOnClickListener {
             AlertDialog.Builder(this)

@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import coil3.asImage
 import coil3.dispose
 import coil3.load
 
@@ -69,15 +70,17 @@ class FileRecyclerViewAdapter(
         if (!item.isDirectory && FileUtils.isImageFile(item.name)) {
             holder.icon.dispose()
 
+            // ✅ В Coil 3 headers передаются через OkHttp interceptor глобально
+            // WebDavClient.httpClient уже настроен с AuthInterceptor
             holder.icon.load(WebDavImages.url(serverUrl(), item.path)) {
-                // ✅ addHeader() работает напрямую в Coil 3
-                addHeader("Authorization", WebDavImages.basicHeader(user(), pass()))
                 memoryCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
-                // ✅ placeholder принимает Drawable, используем ContextCompat
-                placeholder(ContextCompat.getDrawable(context, android.R.drawable.ic_menu_gallery))
-                error(ContextCompat.getDrawable(context, android.R.drawable.ic_menu_report_image))
-                // ✅ crossfade убран - настроен глобально в BackupApplication
+                ContextCompat.getDrawable(context, android.R.drawable.ic_menu_gallery)?.let {
+                    placeholder(it.asImage())
+                }
+                ContextCompat.getDrawable(context, android.R.drawable.ic_menu_report_image)?.let {
+                    error(it.asImage())
+                }
                 size(96, 96)
 
                 listener(

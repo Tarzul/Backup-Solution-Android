@@ -8,7 +8,6 @@ import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
-import coil3.transition.CrossfadeTransition
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
@@ -40,17 +39,18 @@ class BackupApplication : Application(), Configuration.Provider, SingletonImageL
             .build()
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
+        val androidContext = context as android.content.Context
+
         return ImageLoader.Builder(context)
             .components {
                 add(OkHttpNetworkFetcherFactory(WebDavClient.httpClient))
-                // ✅ Crossfade через Transition.Factory
-                add(CrossfadeTransition.Factory())
             }
             .memoryCache {
-                MemoryCache.Builder(context)
-                    .maxSizePercent(0.25)
+                MemoryCache.Builder()  // ✅ БЕЗ параметров
+                    .maxSizePercent(androidContext, 0.25)  // ✅ Context как первый параметр
                     .build()
             }
+            // ✅ crossfade убираем отсюда, добавим через transition в components если нужно
             .build()
     }
 }

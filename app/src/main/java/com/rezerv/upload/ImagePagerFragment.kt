@@ -15,6 +15,7 @@ import androidx.fragment.app.activityViewModels
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
+import coil3.asImage
 import coil3.load
 import coil3.request.ImageRequest
 import com.rezerv.upload.viewmodel.BrowserViewModel
@@ -218,15 +219,17 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val f = images[position]
             holder.pb.visibility = View.VISIBLE
+
+            // ✅ Headers уже настроены глобально в WebDavClient.httpClient
             holder.iv.load(WebDavImages.url(server, f.path)) {
-                // ✅ addHeader() работает напрямую
-                addHeader("Authorization", WebDavImages.basicHeader(user, pass))
                 memoryCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
-                // ✅ placeholder через ContextCompat.getDrawable
-                placeholder(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery))
-                error(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_report_image))
-                // ✅ crossfade убран - настроен глобально
+                ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery)?.let {
+                    placeholder(it.asImage())
+                }
+                ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_report_image)?.let {
+                    error(it.asImage())
+                }
                 listener(object : ImageRequest.Listener {
                     override fun onStart(request: ImageRequest) {}
                     override fun onSuccess(request: ImageRequest, result: coil3.request.SuccessResult) {
@@ -268,14 +271,15 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             val f = images[position]
 
             holder.iv.load(WebDavImages.url(server, f.path)) {
-                // ✅ addHeader() работает напрямую
-                addHeader("Authorization", WebDavImages.basicHeader(user, pass))
                 memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 size(240)
-                // ✅ placeholder через ContextCompat.getDrawable
-                placeholder(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery))
-                error(ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_report_image))
+                ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery)?.let {
+                    placeholder(it.asImage())
+                }
+                ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_report_image)?.let {
+                    error(it.asImage())
+                }
             }
 
             holder.check.visibility = if (isImageSelected(f)) View.VISIBLE else View.GONE

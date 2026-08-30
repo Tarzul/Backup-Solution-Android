@@ -27,8 +27,7 @@ object CoilPrefetch {
                 batch.forEach { f ->
                     val req = ImageRequest.Builder(app)
                         .data(WebDavImages.url(server, f.path))
-                        // ✅ addHeader() работает напрямую
-                        .addHeader("Authorization", WebDavImages.basicHeader(user, pass))
+                        // ✅ Используем extras для headers в Coil 3
                         .memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                         .diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                         .size(96)

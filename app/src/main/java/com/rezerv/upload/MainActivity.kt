@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        picked = uris ?: emptyList()
+        picked = uris
         picked.forEach { uri ->
             try {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)

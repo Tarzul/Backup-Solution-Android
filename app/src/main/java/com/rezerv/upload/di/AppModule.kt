@@ -36,7 +36,7 @@ object AppModule {
             AppDatabase::class.java,
             "rezerv_database"
         )
-        .fallbackToDestructiveMigration()
+            .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
     }
 

@@ -4,24 +4,29 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+import androidx.security.crypto.MasterKey
 
+@Suppress("DEPRECATION")
 object SecurePrefs {
     private const val TAG = "SecurePrefs"
-    private const val PREFS_NAME = "webdav_settings_encrypted"
+    private const val PREFS_NAME = "webdav_settings_encrypted_v2"
 
-    @Volatile private var prefs: SharedPreferences? = null
+    @Volatile
+    private var prefs: SharedPreferences? = null
 
     @Synchronized
     private fun getPrefs(context: Context): SharedPreferences? {
         prefs?.let { return it }
+
         return try {
-            // В 1.0.0 используется MasterKeys.getOrCreate() -> String (alias)
-            val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+
             val p = EncryptedSharedPreferences.create(
-                PREFS_NAME,           // 1) имя файла
-                masterKeyAlias,       // 2) alias ключа (String)
-                context,              // 3) context
+                context,
+                PREFS_NAME,
+                masterKey,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )

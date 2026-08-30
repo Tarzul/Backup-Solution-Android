@@ -170,8 +170,7 @@ object WebDavRepository {
                 return@withContext DownloadResult.HttpError(response.code, url)
             }
 
-            val inputStream = response.body?.byteStream()
-                ?: return@withContext DownloadResult.IoError("Пустой ответ от сервера").also { response.close() }
+            val inputStream = response.body.byteStream()
 
             // ====== ШАГ 4: Streaming запись с прогрессом ======
             var downloadedBytes = existingBytes

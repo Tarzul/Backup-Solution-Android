@@ -61,10 +61,10 @@ class MainViewModel @Inject constructor(
 
     private var rangeBase: Set<Int> = emptySet()
     private var rangeModeAdd = true
-    
+
     var pagerImages: List<WebDavRepository.FileInfo> = emptyList()
         private set
-    
+
     private val uploadSemaphore = Semaphore(MAX_PARALLEL_UPLOADS)
     private val logBuffer = CircularLogBuffer(maxLines = 200, maxChars = 20000)
 
@@ -115,12 +115,12 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             appendLog("📋 Получение списка: $path")
-        
+
             val files = WebDavRepository.listFiles(base, path, user, pass)
             val sorted = files.sortedWith(
                 compareBy<WebDavRepository.FileInfo> { !it.isDirectory }.thenBy { it.name }
             )
-        
+
             _uiState.value = _uiState.value?.copy(
                 currentPath = path,
                 files = sorted,
@@ -128,7 +128,7 @@ class MainViewModel @Inject constructor(
                 selectionMode = false,
                 selectedIndices = emptySet()
             )
-        
+
             appendLog("✓ Элементов: ${sorted.size}")
             CoilPrefetch.prefetch(getApplication(), server, user, pass, sorted)
         }
@@ -137,24 +137,24 @@ class MainViewModel @Inject constructor(
     fun navigateBack(server: String, user: String, pass: String) {
         val currentPath = _uiState.value?.currentPath ?: "/"
         val root = WebDavRepository.getServerPath(server)
-        
+
         appendLog("⬅ DEBUG Назад: текущий='$currentPath', корень='$root'")
-        
+
         if (currentPath == root || currentPath == "/") {
             _events.value = Event.ShowToast("Уже в корне")
             return
         }
-        
+
         val trimmed = currentPath.trimEnd('/')
         if (trimmed.isEmpty()) {
             appendLog("⬅ Переход в корень: $root")
             browseServer(server, root, user, pass)
             return
         }
-        
+
         val lastSlash = trimmed.lastIndexOf('/')
         val parentPath = if (lastSlash <= 0) root else trimmed.substring(0, lastSlash + 1)
-        
+
         appendLog("⬅ Переход в родительскую: '$parentPath'")
         browseServer(server, parentPath, user, pass)
     }
@@ -233,12 +233,12 @@ class MainViewModel @Inject constructor(
         appendLog("Сервер: $server")
         appendLog("Папка: $targetPath")
         appendLog("Файлов: ${uris.size} (макс. $MAX_PARALLEL_UPLOADS параллельно)")
-        
+
         if (uris.isEmpty()) {
             _events.value = Event.ShowToast("Нет файлов для загрузки")
             return
         }
-        
+
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server)
             if (base == null) {
@@ -246,7 +246,7 @@ class MainViewModel @Inject constructor(
                 _events.value = Event.ShowToast("Ошибка: неверный адрес сервера")
                 return@launch
             }
-            
+
             val total = uris.size
             val startTime = System.currentTimeMillis()
 
@@ -277,14 +277,14 @@ class MainViewModel @Inject constructor(
                                 appendLog("✗ [$index/$total] Не удалось открыть: ${meta.name}")
                                 return@withPermit Triple(false, meta.name, 0L to 0L)
                             }
-                            
+
                             val code = inputStream.use { input ->
                                 WebDavClient.put(
                                     base + WebDavRepository.encodePath(remotePath),
                                     user, pass, input
                                 )
                             }
-                            
+
                             val fileMs = System.currentTimeMillis() - fileStart
                             if (code in 200..299) {
                                 appendLog("✓ [$index/$total] ${meta.name} загружен")
@@ -356,10 +356,10 @@ class MainViewModel @Inject constructor(
             val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
             if (selected.isEmpty()) return@launch
             exitSelectionMode()
-            
+
             var successCount = 0
             var errorCount = 0
-            
+
             selected.forEach { file ->
                 val result = WebDavRepository.deleteFile(base, file.path, user, pass)
                 when (result) {
@@ -373,7 +373,7 @@ class MainViewModel @Inject constructor(
                     }
                 }
             }
-            
+
             _events.value = Event.ShowToast("Удалено: $successCount, ошибок: $errorCount")
             browseServer(server, state.currentPath, user, pass)
         }
@@ -386,10 +386,10 @@ class MainViewModel @Inject constructor(
             val selected = state.selectedIndices.mapNotNull { state.files.getOrNull(it) }
             if (selected.isEmpty()) return@launch
             exitSelectionMode()
-            
+
             var successCount = 0
             var errorCount = 0
-            
+
             selected.filter { !it.isDirectory }.forEach { file ->
                 val result = WebDavRepository.downloadFile(
                     getApplication(), base, file.path, file.name, user, pass
@@ -409,7 +409,7 @@ class MainViewModel @Inject constructor(
                     }
                 }
             }
-            
+
             _events.value = Event.ShowToast("Скачано: $successCount, ошибок: $errorCount")
         }
     }
@@ -418,11 +418,11 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             appendLog("⬇ Скачивание: $fileName")
-        
+
             val result = WebDavRepository.downloadFile(
                 getApplication(), base, path, fileName, user, pass
             )
-        
+
             when (result) {
                 is WebDavRepository.DownloadResult.Success -> {
                     appendLog("✓ Скачано: $fileName (${FileUtils.formatSize(result.bytesDownloaded)})")
@@ -451,7 +451,7 @@ class MainViewModel @Inject constructor(
                     if (resp.code !in 200..299) { resp.close(); return@withContext null }
                     val dir = java.io.File(getApplication<Application>().cacheDir, "videos").apply { mkdirs() }
                     val f = java.io.File(dir, item.name)
-                    f.outputStream().use { out -> resp.body?.byteStream()?.use { it.copyTo(out) } }
+                    f.outputStream().use { out -> resp.body.byteStream().use { it.copyTo(out) } }
                     resp.close()
                     f
                 } catch (e: Exception) { null }
@@ -476,9 +476,9 @@ class MainViewModel @Inject constructor(
             val base = WebDavRepository.normalizeBaseUrl(server) ?: return@launch
             val newPath = (if (state.currentPath.endsWith("/")) state.currentPath
             else "${state.currentPath}/") + folderName + "/"
-        
+
             val result = WebDavRepository.createFolder(base, newPath, user, pass)
-        
+
             when (result) {
                 is WebDavResult.Success -> {
                     appendLog("✓ Папка создана: $folderName")
@@ -488,7 +488,7 @@ class MainViewModel @Inject constructor(
                 else -> {
                     appendLog("✗ Ошибка создания папки: ${result.errorMessage()}")
                     _events.value = Event.ShowToast("Ошибка: ${result.errorMessage()}")
-                }   
+                }
             }
         }
     }
@@ -516,23 +516,23 @@ class MainViewModel @Inject constructor(
     fun runTaskNow(t: SyncTask) {
         viewModelScope.launch {
             val startTime = System.currentTimeMillis()
-            
+
             if (!HistoryManager.createLiveRecord(getApplication(), startTime, t.name, "user", t.id)) {
                 _events.value = Event.ShowToast("Задание уже выполняется")
                 return@launch
             }
-            
+
             refreshHistory()
             _events.value = Event.SwitchTab(3)
             _events.value = Event.ShowToast("Запуск синхронизации...")
-            
+
             val ticker = viewModelScope.launch {
                 while (isActive) {
                     delay(1000)
                     refreshHistory()
                 }
             }
-            
+
             val result = withContext(Dispatchers.IO) {
                 SyncEngine.runTask(
                     getApplication(), t, trigger = "user",
@@ -543,7 +543,7 @@ class MainViewModel @Inject constructor(
                     }
                 )
             }
-            
+
             ticker.cancel()
             val updated = t.copy(
                 lastRun = System.currentTimeMillis(),

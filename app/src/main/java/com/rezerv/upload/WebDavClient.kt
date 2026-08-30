@@ -138,7 +138,7 @@ object WebDavClient {
             if (!response.isSuccessful) {
                 throw IOException("PROPFIND failed: HTTP ${response.code}")
             }
-            response.body?.string() ?: ""
+            response.body.string()
         }
     }
 
@@ -207,7 +207,7 @@ object WebDavClient {
                 if (!response.isSuccessful) {
                     Result.failure(IOException("HTTP ${response.code}"))
                 } else {
-                    val body = response.body ?: return@use Result.failure(IOException("Empty body"))
+                    val body = response.body
                     val contentLength = body.contentLength()
                     var bytesCopied = 0L
                 

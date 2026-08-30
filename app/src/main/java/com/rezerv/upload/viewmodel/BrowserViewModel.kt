@@ -34,9 +34,9 @@ import javax.inject.Inject
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
     application: Application,
-    private val webDavService: WebDavService,       // ✅ Внедрение
-    private val historyRepo: HistoryRepository,     // ✅ Внедрение
-    private val settingsRepo: SettingsRepository    // ✅ Внедрение
+    private val webDavService: WebDavService,
+    private val historyRepo: HistoryRepository,
+    private val settingsRepo: SettingsRepository
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -448,7 +448,7 @@ class BrowserViewModel @Inject constructor(
                     if (resp.code !in 200..299) { resp.close(); return@withContext null }
                     val dir = java.io.File(getApplication<Application>().cacheDir, "videos").apply { mkdirs() }
                     val f = java.io.File(dir, item.name)
-                    f.outputStream().use { out -> resp.body?.byteStream()?.use { it.copyTo(out) } }
+                    f.outputStream().use { out -> resp.body.byteStream().use { it.copyTo(out) } }
                     resp.close()
                     f
                 } catch (e: Exception) { null }

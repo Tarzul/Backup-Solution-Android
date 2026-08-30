@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.asImage
 import coil3.dispose
 import coil3.load
+import coil3.request.crossfade
 
 class FileRecyclerViewAdapter(
     private val context: Context,
@@ -70,11 +71,12 @@ class FileRecyclerViewAdapter(
         if (!item.isDirectory && FileUtils.isImageFile(item.name)) {
             holder.icon.dispose()
 
-            // ✅ В Coil 3 headers передаются через OkHttp interceptor глобально
-            // WebDavClient.httpClient уже настроен с AuthInterceptor
             holder.icon.load(WebDavImages.url(serverUrl(), item.path)) {
                 memoryCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
+
+                crossfade(200)  // ✅ ДОБАВЬТЕ ЭТУ СТРОКУ (200мс для миниатюр)
+
                 ContextCompat.getDrawable(context, android.R.drawable.ic_menu_gallery)?.let {
                     placeholder(it.asImage())
                 }

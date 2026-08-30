@@ -39,18 +39,15 @@ class BackupApplication : Application(), Configuration.Provider, SingletonImageL
             .build()
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
-        val androidContext = context as android.content.Context
-
         return ImageLoader.Builder(context)
             .components {
                 add(OkHttpNetworkFetcherFactory(WebDavClient.httpClient))
             }
             .memoryCache {
-                MemoryCache.Builder()  // ✅ БЕЗ параметров
-                    .maxSizePercent(androidContext, 0.25)  // ✅ Context как первый параметр
+                MemoryCache.Builder()
+                    .maxSizePercent(context, 0.25)
                     .build()
             }
-            // ✅ crossfade убираем отсюда, добавим через transition в components если нужно
             .build()
     }
 }

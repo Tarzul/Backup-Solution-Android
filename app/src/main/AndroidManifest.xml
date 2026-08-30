@@ -83,8 +83,6 @@
         tools:targetApi="34">
 
         <!-- ==================== WorkManager Configuration ==================== -->
-        <!-- ✅ КРИТИЧНО: Отключаем дефолтный инициализатор WorkManager -->
-        <!-- Это предотвращает crash "WorkManager is already initialized" -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"

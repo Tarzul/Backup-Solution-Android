@@ -18,6 +18,7 @@ import androidx.viewpager2.widget.ViewPager2
 import coil3.asImage
 import coil3.load
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.rezerv.upload.viewmodel.BrowserViewModel
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -224,6 +225,9 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             holder.iv.load(WebDavImages.url(server, f.path)) {
                 memoryCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
+
+                crossfade(300)  // ✅ ДОБАВЬТЕ ЭТУ СТРОКУ (300мс для больших фото)
+
                 ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery)?.let {
                     placeholder(it.asImage())
                 }
@@ -274,6 +278,9 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
                 memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 size(240)
+
+                crossfade(200)  // ✅ ДОБАВЬТЕ ЭТУ СТРОКУ (200мс для миниатюр)
+
                 ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery)?.let {
                     placeholder(it.asImage())
                 }

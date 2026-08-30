@@ -9,6 +9,7 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+        maven("https://central.sonatype.com/repository/maven-snapshots/")
     }
 }
 
@@ -17,8 +18,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // ✅ KSP snapshots
+        maven("https://central.sonatype.com/repository/maven-snapshots/")
     }
 }
 
-rootProject.name = "Backup-Solution-Android"
+rootProject.name = "Backup Solution Android"
 include(":app")

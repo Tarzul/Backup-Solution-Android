@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <full-backup-content>
 
-    <!-- ✅ Включаем домены -->
-    <include domain="sharedpref" path="."/>
-    <include domain="database" path="."/>
-    <include domain="file" path="."/>
+    <!-- ✅ Включаем только настройки пользователя (кроме credentials) -->
+    <include domain="sharedpref" path="user_preferences.xml" />
+    <include domain="sharedpref" path="app_settings.xml" />
 
     <!-- ✅ Исключаем credentials -->
     <exclude domain="sharedpref" path="webdav_settings_encrypted.xml" />
@@ -23,5 +23,8 @@
     <exclude domain="file" path="videos/" />
     <exclude domain="file" path="sync_temp/" />
     <exclude domain="file" path="logs/" />
+
+    <!-- ✅ Исключаем внешний кэш -->
+    <exclude domain="external" path="." />
 
 </full-backup-content>

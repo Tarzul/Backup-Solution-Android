@@ -134,6 +134,16 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
         }
     }
 
+    // ✅ ИСПРАВЛЕНИЕ УТЕЧКИ ПАМЯТИ: Очистка при уничтожении View
+    override fun onDestroyView() {
+        super.onDestroyView()
+        // Отменяем все запросы на загрузку изображений
+        pager.adapter = null
+        thumbsRecycler.adapter = null
+        pagerAdapter = null as PagerAdapter
+        thumbsAdapter = null as ThumbAdapter
+    }
+
     private fun setupCarouselPadding() {
         if (thumbsRecycler.width == 0) return
         val density = resources.displayMetrics.density
@@ -221,12 +231,11 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
             val f = images[position]
             holder.pb.visibility = View.VISIBLE
 
-            // ✅ Headers уже настроены глобально в WebDavClient.httpClient
             holder.iv.load(WebDavImages.url(server, f.path)) {
                 memoryCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
                 diskCacheKey(WebDavImages.cacheKey("full", f.path, f.size))
 
-                crossfade(300)  // ✅ ДОБАВЬТЕ ЭТУ СТРОКУ (300мс для больших фото)
+                crossfade(300)
 
                 ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery)?.let {
                     placeholder(it.asImage())
@@ -279,7 +288,7 @@ class ImagePagerFragment : Fragment(R.layout.fragment_image_pager) {
                 diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                 size(240)
 
-                crossfade(200)  // ✅ ДОБАВЬТЕ ЭТУ СТРОКУ (200мс для миниатюр)
+                crossfade(200)
 
                 ContextCompat.getDrawable(requireContext(), android.R.drawable.ic_menu_gallery)?.let {
                     placeholder(it.asImage())

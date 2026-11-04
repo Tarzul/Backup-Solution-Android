@@ -133,6 +133,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     // ==================== Initialization ====================
 
     private fun initViews() {
+        // Tabs
         tabManager = TabManager(
             tabs = mapOf(
                 0 to findViewById<ScrollView>(R.id.tabConnection),
@@ -149,6 +150,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             )
         )
 
+        // Connection form
         connectionForm = ConnectionFormHandler(
             context = this,
             etServer = findViewById(R.id.etServer),
@@ -157,6 +159,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             spAuth = findViewById(R.id.spAuth)
         )
 
+        // File browser
         rvFiles = findViewById(R.id.rvFiles)
         fileBrowser = FileBrowserHandler(
             context = this,
@@ -175,6 +178,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             onItemClick = { item, position -> handleFileClick(item, position) }
         )
 
+        // Остальные компоненты
         tvLog = findViewById(R.id.tvLog)
         historyChart = findViewById(R.id.historyChart)
         historyContainer = findViewById(R.id.historyContainer)
@@ -189,13 +193,16 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     }
 
     private fun setupListeners() {
+        // Tabs
         findViewById<Button>(R.id.btnTabConnection).setOnClickListener { switchToTab(0) }
         findViewById<Button>(R.id.btnTabBrowser).setOnClickListener { switchToTab(1) }
         findViewById<Button>(R.id.btnTabTasks).setOnClickListener { switchToTab(2) }
         findViewById<Button>(R.id.btnTabHistory).setOnClickListener { switchToTab(3) }
 
+        // Connection
         findViewById<Button>(R.id.btnConnect).setOnClickListener { handleConnect() }
 
+        // Browser
         findViewById<Button>(R.id.btnBack).setOnClickListener {
             val (server, user, pass) = connectionVM.loadSettings()
             browserVM.navigateBack(server, user, pass)
@@ -210,6 +217,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
         findViewById<Button>(R.id.btnSelDelete).setOnClickListener { handleDelete() }
         findViewById<Button>(R.id.btnSelCancel).setOnClickListener { browserVM.exitSelectionMode() }
 
+        // History
         findViewById<Button>(R.id.btnClearHistory).setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle(R.string.clear_history)
@@ -226,8 +234,9 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             browserVM.forceRefresh(server, user, pass)
         }
 
+        // ✅ Кнопка загрузки из Empty State
         btnUploadFromEmpty.setOnClickListener {
-            picker.launch(arrayOf("*/*"))
+            handleUpload()
         }
     }
 
@@ -285,32 +294,35 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             // ✅ Управление SwipeRefresh
             swipeRefreshBrowser.isRefreshing = state.isLoading
 
-            // ✅ Управление Empty State
-            if (state.isEmpty && !state.isLoading) {
+            // ✅ Управление Empty State — показываем когда загрузка завершена и файлов нет
+            if (state.files.isEmpty() && !state.isLoading) {
                 emptyStateBrowser.visibility = View.VISIBLE
                 rvFiles.visibility = View.GONE
+                // skeletonFiles управляется внутри FileBrowserHandler, поэтому здесь не трогаем
             } else {
                 emptyStateBrowser.visibility = View.GONE
                 rvFiles.visibility = View.VISIBLE
             }
 
-            // ✅ Управление LayoutManager (Список vs Сетка)
+            // ✅ ИСПРАВЛЕНИЕ: Переключение вида (Список/Сетка)
+            // GridLayoutManager наследуется от LinearLayoutManager, поэтому нужна точная проверка
             if (state.viewMode == BrowserViewModel.ViewMode.GRID) {
                 if (rvFiles.layoutManager !is GridLayoutManager) {
-                    rvFiles.layoutManager = GridLayoutManager(this, 3) // 3 колонки
+                    rvFiles.layoutManager = GridLayoutManager(this, 3)
                 }
             } else {
-                if (rvFiles.layoutManager !is LinearLayoutManager) {
+                // Если сейчас Grid — меняем на обычный LinearLayoutManager
+                if (rvFiles.layoutManager is GridLayoutManager) {
                     rvFiles.layoutManager = LinearLayoutManager(this)
                 }
             }
 
-            // Обновление данных в адаптере
+            // Обновление данных в адаптере (FileBrowserHandler сам скроет skeletonFiles, если !state.isLoading)
             fileBrowser.updateFileList(state)
             fileBrowser.updateSelectionUI(state.selectionMode, state.selectedIndices.size)
             fileBrowser.updateCurrentPath(state.currentPath)
 
-            // ✅ Остановка индикатора обновления, если загрузка завершена
+            // ✅ Остановка индикатора обновления
             if (!state.isLoading && !state.isLoadingMore) {
                 swipeRefreshBrowser.isRefreshing = false
             }

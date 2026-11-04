@@ -230,4 +230,7 @@ dependencies {
 
     // Shimmer для скелетон-загрузки
     implementation("com.facebook.shimmer:shimmer:0.5.0")
+
+    // SwipeRefreshLayout
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 }

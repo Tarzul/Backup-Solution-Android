@@ -12,6 +12,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.rezerv.upload.navigation.NavigationManager
 import com.rezerv.upload.permissions.PermissionHandler
 import com.rezerv.upload.ui.ConnectionFormHandler
@@ -61,6 +65,13 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     private lateinit var tvHistoryEmpty: TextView
     private lateinit var historyChart: HistoryChartView
     private lateinit var skeletonHistory: View
+
+    // ✅ НОВЫЕ UI компоненты для браузера
+    private lateinit var swipeRefreshBrowser: SwipeRefreshLayout
+    private lateinit var emptyStateBrowser: LinearLayout
+    private lateinit var btnUploadFromEmpty: Button
+    private lateinit var btnViewMode: ImageButton
+    private lateinit var rvFiles: RecyclerView
 
     // Состояние
     private var picked: List<android.net.Uri> = emptyList()
@@ -146,10 +157,11 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             spAuth = findViewById(R.id.spAuth)
         )
 
+        rvFiles = findViewById(R.id.rvFiles)
         fileBrowser = FileBrowserHandler(
             context = this,
             browserVM = browserVM,
-            rvFiles = findViewById(R.id.rvFiles),
+            rvFiles = rvFiles,
             skeletonFiles = findViewById(R.id.skeletonFiles),
             tvCurrentPath = findViewById(R.id.tvCurrentPath),
             llSelection = findViewById(R.id.llSelection),
@@ -168,6 +180,12 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
         historyContainer = findViewById(R.id.historyContainer)
         tvHistoryEmpty = findViewById(R.id.tvHistoryEmpty)
         skeletonHistory = findViewById(R.id.skeletonHistory)
+
+        // ✅ Инициализация новых UI элементов
+        swipeRefreshBrowser = findViewById(R.id.swipeRefreshBrowser)
+        emptyStateBrowser = findViewById(R.id.emptyStateBrowser)
+        btnUploadFromEmpty = findViewById(R.id.btnUploadFromEmpty)
+        btnViewMode = findViewById(R.id.btnViewMode)
     }
 
     private fun setupListeners() {
@@ -198,6 +216,18 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
                 .setPositiveButton(R.string.clear) { _, _ -> historyVM.clearHistory() }
                 .setNegativeButton(R.string.cancel, null)
                 .show()
+        }
+
+        // ✅ НОВЫЕ слушатели
+        btnViewMode.setOnClickListener { browserVM.toggleViewMode() }
+
+        swipeRefreshBrowser.setOnRefreshListener {
+            val (server, user, pass) = connectionVM.loadSettings()
+            browserVM.forceRefresh(server, user, pass)
+        }
+
+        btnUploadFromEmpty.setOnClickListener {
+            picker.launch(arrayOf("*/*"))
         }
     }
 
@@ -252,10 +282,40 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
 
     private fun observeBrowserVM() {
         browserVM.state.observe(this) { state ->
+            // ✅ Управление SwipeRefresh
+            swipeRefreshBrowser.isRefreshing = state.isLoading
+
+            // ✅ Управление Empty State
+            if (state.isEmpty && !state.isLoading) {
+                emptyStateBrowser.visibility = View.VISIBLE
+                rvFiles.visibility = View.GONE
+            } else {
+                emptyStateBrowser.visibility = View.GONE
+                rvFiles.visibility = View.VISIBLE
+            }
+
+            // ✅ Управление LayoutManager (Список vs Сетка)
+            if (state.viewMode == BrowserViewModel.ViewMode.GRID) {
+                if (rvFiles.layoutManager !is GridLayoutManager) {
+                    rvFiles.layoutManager = GridLayoutManager(this, 3) // 3 колонки
+                }
+            } else {
+                if (rvFiles.layoutManager !is LinearLayoutManager) {
+                    rvFiles.layoutManager = LinearLayoutManager(this)
+                }
+            }
+
+            // Обновление данных в адаптере
             fileBrowser.updateFileList(state)
             fileBrowser.updateSelectionUI(state.selectionMode, state.selectedIndices.size)
             fileBrowser.updateCurrentPath(state.currentPath)
+
+            // ✅ Остановка индикатора обновления, если загрузка завершена
+            if (!state.isLoading && !state.isLoadingMore) {
+                swipeRefreshBrowser.isRefreshing = false
+            }
         }
+
         browserVM.log.observe(this) { tvLog.text = it }
         browserVM.events.observe(this) { handleBrowserEvent(it) }
     }
@@ -277,9 +337,6 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     private fun handleConnectionEvent(event: ConnectionViewModel.ConnectionEvent) {
         when (event) {
             is ConnectionViewModel.ConnectionEvent.Connected -> {
-                // ✅ ИСПРАВЛЕНО: Убран явный вызов browserVM.browseServer.
-                // switchToTab(1) автоматически вызовет loadBrowserIfNeeded(),
-                // который безопасно загрузит файлы, если список пуст.
                 switchToTab(1)
             }
             is ConnectionViewModel.ConnectionEvent.ConnectionFailed -> {
@@ -288,6 +345,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
                     "${getString(R.string.connection_failed)}: ${event.error}",
                     Toast.LENGTH_SHORT
                 ).show()
+                swipeRefreshBrowser.isRefreshing = false
             }
         }
     }

@@ -20,6 +20,7 @@ import com.rezerv.upload.data.HistoryRepository
 import com.rezerv.upload.data.SettingsRepository
 import com.rezerv.upload.data.WebDavService
 import com.rezerv.upload.data.local.FileDao
+import com.rezerv.upload.data.toFileInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -209,10 +210,23 @@
                 android:textStyle="bold"
                 android:maxLines="1"
                 android:ellipsize="middle" />
+
+            <!-- ✅ НОВАЯ КНОПКА: Переключатель вида (Список/Сетка) -->
+            <ImageButton
+                android:id="@+id/btnViewMode"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:src="@android:drawable/ic_menu_view"
+                android:background="@drawable/bg_button_secondary"
+                android:contentDescription="Переключить вид"
+                android:padding="12dp"
+                android:scaleType="centerInside" />
+
             <Button
                 android:id="@+id/btnNewFolder"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
+                android:layout_marginStart="8dp"
                 android:text="➕"
                 android:background="@drawable/bg_button_secondary"
                 android:textColor="@color/text_secondary"
@@ -285,25 +299,73 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Skeleton для загрузки списка файлов -->
-        <include
-            android:id="@+id/skeletonFiles"
-            layout="@layout/skeleton_file_list"
+        <!-- ✅ SwipeRefreshLayout для обновления свайпом вниз -->
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/swipeRefreshBrowser"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="12dp"
-            android:visibility="gone" />
+            android:layout_marginTop="12dp">
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/rvFiles"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/bg_rounded_dark"
-            android:clipToPadding="false"
-            android:padding="4dp" />
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <!-- Skeleton для загрузки списка файлов -->
+                <include
+                    android:id="@+id/skeletonFiles"
+                    layout="@layout/skeleton_file_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone" />
+
+                <!-- ✅ НОВОЕ: Empty State (Пустая папка) -->
+                <LinearLayout
+                    android:id="@+id/emptyStateBrowser"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="32dp"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:layout_width="96dp"
+                        android:layout_height="96dp"
+                        android:src="@android:drawable/ic_menu_gallery"
+                        android:alpha="0.5"
+                        android:contentDescription="Папка пуста" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="В этой папке пока пусто"
+                        android:textSize="16sp"
+                        android:textColor="@color/hint_gray" />
+
+                    <Button
+                        android:id="@+id/btnUploadFromEmpty"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="Загрузить файлы"
+                        android:background="@drawable/bg_button_primary"
+                        android:textColor="@color/black"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <!-- RecyclerView -->
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rvFiles"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:padding="4dp" />
+
+            </FrameLayout>
+
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     </LinearLayout>
 
@@ -356,7 +418,7 @@
                 android:layout_height="180dp"
                 android:layout_marginTop="12dp"
                 android:background="@drawable/bg_rounded_dark" />
-            <!-- Skeleton для истории -->
+
             <LinearLayout
                 android:id="@+id/skeletonHistory"
                 android:layout_width="match_parent"

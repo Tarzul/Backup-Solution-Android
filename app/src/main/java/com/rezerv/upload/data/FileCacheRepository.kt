@@ -14,7 +14,6 @@ class FileCacheRepository @Inject constructor(
     private val fileDao: FileDao,
     private val webDavService: WebDavService
 ) {
-    // ✅ ИСПРАВЛЕНО: убран const, теперь это просто val
     private val TAG = "FileCacheRepo"
 
     fun getFilesFlow(serverHost: String, parentPath: String): Flow<List<WebDavRepository.FileInfo>> {
@@ -58,8 +57,8 @@ class FileCacheRepository @Inject constructor(
     suspend fun clearCache(serverHost: String) = fileDao.clearServerCache(serverHost)
 }
 
-// ✅ ИСПРАВЛЕНО: убран параметр mimeType, которого нет в оригинальном классе
-private fun FileEntity.toFileInfo(): WebDavRepository.FileInfo {
+// ✅ ИСПРАВЛЕНО: internal вместо private, чтобы функция была видна в BrowserViewModel
+internal fun FileEntity.toFileInfo(): WebDavRepository.FileInfo {
     return WebDavRepository.FileInfo(
         name = name,
         path = path,

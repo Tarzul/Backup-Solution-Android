@@ -1,6 +1,7 @@
 package com.rezerv.upload
 
 import android.app.Application
+import android.content.Context // ✅ Добавлен обычный импорт Context
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil3.ImageLoader
@@ -39,15 +40,19 @@ class BackupApplication : Application(), Configuration.Provider, SingletonImageL
             .build()
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
+        // ✅ В Coil 3 PlatformContext уже является Context, приведение типов не нужно
+        val androidContext = context as Context
+
         return ImageLoader.Builder(context)
             .components {
                 add(OkHttpNetworkFetcherFactory(WebDavClient.httpClient))
             }
             .memoryCache {
                 MemoryCache.Builder()
-                    .maxSizePercent(context, 0.25)
+                    .maxSizePercent(androidContext, 0.25)
                     .build()
             }
+            // Дисковый кэш создается Coil автоматически, ручная настройка удалена во избежание конфликтов версий Okio
             .build()
     }
 }

@@ -13,6 +13,7 @@ import com.rezerv.upload.data.impl.SettingsRepositoryImpl
 import com.rezerv.upload.data.impl.TaskRepositoryImpl
 import com.rezerv.upload.data.impl.WebDavServiceImpl
 import com.rezerv.upload.data.local.AppDatabase
+import com.rezerv.upload.data.local.FileDao // ✅ ДОБАВЛЕН ИМПОРТ
 import com.rezerv.upload.data.local.TaskDao
 import dagger.Binds
 import dagger.Module
@@ -37,12 +38,16 @@ object AppModule {
             "rezerv_database"
         )
             .fallbackToDestructiveMigration(dropAllTables = true)
-        .build()
+            .build()
     }
 
     // ✅ TaskDao из Database
     @Provides
     fun provideTaskDao(db: AppDatabase): TaskDao = db.taskDao()
+
+    // ✅ FileDao из Database (ИМЕННО ЭТОГО НЕ ХВАТАЛО HILT)
+    @Provides
+    fun provideFileDao(db: AppDatabase): FileDao = db.fileDao()
 }
 
 // ==================== Binds (интерфейсы к реализациям) ====================

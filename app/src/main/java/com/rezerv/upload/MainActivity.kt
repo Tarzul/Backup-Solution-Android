@@ -12,7 +12,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.recyclerview.widget.RecyclerView
 import com.rezerv.upload.navigation.NavigationManager
 import com.rezerv.upload.permissions.PermissionHandler
 import com.rezerv.upload.ui.ConnectionFormHandler
@@ -123,7 +122,6 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     // ==================== Initialization ====================
 
     private fun initViews() {
-        // Tabs
         tabManager = TabManager(
             tabs = mapOf(
                 0 to findViewById<ScrollView>(R.id.tabConnection),
@@ -140,7 +138,6 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             )
         )
 
-        // Connection form (Spinner настраивается внутри)
         connectionForm = ConnectionFormHandler(
             context = this,
             etServer = findViewById(R.id.etServer),
@@ -149,7 +146,6 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             spAuth = findViewById(R.id.spAuth)
         )
 
-        // File browser (с передачей browserVM для DragSelectionListener)
         fileBrowser = FileBrowserHandler(
             context = this,
             browserVM = browserVM,
@@ -167,7 +163,6 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
             onItemClick = { item, position -> handleFileClick(item, position) }
         )
 
-        // Остальные компоненты
         tvLog = findViewById(R.id.tvLog)
         historyChart = findViewById(R.id.historyChart)
         historyContainer = findViewById(R.id.historyContainer)
@@ -176,16 +171,13 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     }
 
     private fun setupListeners() {
-        // Tabs
         findViewById<Button>(R.id.btnTabConnection).setOnClickListener { switchToTab(0) }
         findViewById<Button>(R.id.btnTabBrowser).setOnClickListener { switchToTab(1) }
         findViewById<Button>(R.id.btnTabTasks).setOnClickListener { switchToTab(2) }
         findViewById<Button>(R.id.btnTabHistory).setOnClickListener { switchToTab(3) }
 
-        // Connection
         findViewById<Button>(R.id.btnConnect).setOnClickListener { handleConnect() }
 
-        // Browser
         findViewById<Button>(R.id.btnBack).setOnClickListener {
             val (server, user, pass) = connectionVM.loadSettings()
             browserVM.navigateBack(server, user, pass)
@@ -200,7 +192,6 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
         findViewById<Button>(R.id.btnSelDelete).setOnClickListener { handleDelete() }
         findViewById<Button>(R.id.btnSelCancel).setOnClickListener { browserVM.exitSelectionMode() }
 
-        // History
         findViewById<Button>(R.id.btnClearHistory).setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle(R.string.clear_history)
@@ -286,9 +277,10 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
     private fun handleConnectionEvent(event: ConnectionViewModel.ConnectionEvent) {
         when (event) {
             is ConnectionViewModel.ConnectionEvent.Connected -> {
+                // ✅ ИСПРАВЛЕНО: Убран явный вызов browserVM.browseServer.
+                // switchToTab(1) автоматически вызовет loadBrowserIfNeeded(),
+                // который безопасно загрузит файлы, если список пуст.
                 switchToTab(1)
-                val (server, user, pass) = connectionVM.loadSettings()
-                browserVM.browseServer(server, event.serverPath, user, pass)
             }
             is ConnectionViewModel.ConnectionEvent.ConnectionFailed -> {
                 Toast.makeText(
@@ -465,7 +457,7 @@ class MainActivity : AppCompatActivity(), WebDavFolderPickerDialog.FolderPickerL
         }
     }
 
-    // ==================== Folder Picker (без рекурсии) ====================
+    // ==================== Folder Picker ====================
 
     private fun showServerFolderPicker(server: String, user: String, pass: String) {
         val base = WebDavRepository.normalizeBaseUrl(server)

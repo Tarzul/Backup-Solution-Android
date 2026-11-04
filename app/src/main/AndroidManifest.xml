@@ -118,7 +118,7 @@
         <activity
             android:name=".HistoryDetailsActivity" />
 
-        <!-- ==================== Приёмники ==================== -->
+        <!-- ==================== Приёмники =================== -->
         <receiver
             android:name=".SyncAlarmReceiver"
             android:exported="false" />

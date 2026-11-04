@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.io.InputStream
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -22,8 +23,39 @@ import kotlinx.coroutines.isActive
 object WebDavClient {
     private const val TAG = "WebDavClient"
 
+    // ✅ ИСПРАВЛЕНО: Кастомный DNS resolver для принудительного IPv4
+    private val ipv4Dns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            Log.d(TAG, "DNS lookup: $hostname")
+            return try {
+                val addresses = InetAddress.getAllByName(hostname)
+                val ipv4Addresses = addresses.filter {
+                    it.address.size == 4  // IPv4 = 4 байта
+                }
+
+                Log.d(TAG, "Found ${addresses.size} addresses, ${ipv4Addresses.size} IPv4")
+                addresses.forEach { addr ->
+                    Log.d(TAG, "  - ${addr.hostAddress} (${if (addr.address.size == 4) "IPv4" else "IPv6"})")
+                }
+
+                if (ipv4Addresses.isNotEmpty()) {
+                    Log.d(TAG, "Using IPv4 addresses")
+                    ipv4Addresses
+                } else {
+                    Log.w(TAG, "No IPv4 addresses found, falling back to all addresses")
+                    addresses.toList()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "DNS lookup failed", e)
+                throw IOException("DNS lookup failed for $hostname", e)
+            }
+        }
+    }
+
     // ==================== Единый клиент (singleton) ====================
     val httpClient: OkHttpClient = OkHttpClient.Builder()
+        // ✅ ИСПРАВЛЕНО: Добавлен кастомный DNS resolver
+        .dns(ipv4Dns)
         // Таймауты
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)   // большие файлы
@@ -105,6 +137,7 @@ object WebDavClient {
     // ==================== WebDAV-операции ====================
 
     suspend fun options(server: String, user: String, pass: String): Pair<Int, String> {
+        Log.d(TAG, "OPTIONS request to: $server")
         val request = Request.Builder()
             .url(server)
             .method("OPTIONS", null)
@@ -154,8 +187,8 @@ object WebDavClient {
 
     /** PUT — загружает InputStream, возвращает HTTP-код. */
     suspend fun put(
-        url: String, user: String, pass: String, 
-        inputStream: InputStream, 
+        url: String, user: String, pass: String,
+        inputStream: InputStream,
         fileSize: Long = -1L,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Int {
@@ -210,21 +243,21 @@ object WebDavClient {
                     val body = response.body
                     val contentLength = body.contentLength()
                     var bytesCopied = 0L
-                
+
                     val source = body.source()
                     val sink = outputStream.sink().buffer()
                     val buffer = Buffer()
 
                     while (true) {
-                        // МГНОВЕННАЯ ПРОВЕРКА ОТМЕНЫ: 
+                        // МГНОВЕННАЯ ПРОВЕРКА ОТМЕНЫ:
                         // Если пользователь нажал "Стоп", цикл прервется на следующем чанке (8 КБ)
                         if (!coroutineContext.isActive) {
                             throw kotlinx.coroutines.CancellationException("Download cancelled")
                         }
-                    
+
                         val read = source.read(buffer, 8192)
                         if (read == -1L) break
-                    
+
                         sink.write(buffer, read)
                         bytesCopied += read
                         onProgress(bytesCopied, contentLength)
@@ -236,7 +269,7 @@ object WebDavClient {
         } catch (e: Exception) {
             Result.failure(e)
         }
-    }    
+    }
 
     suspend fun delete(url: String, user: String, pass: String): Int {
         val request = Request.Builder()

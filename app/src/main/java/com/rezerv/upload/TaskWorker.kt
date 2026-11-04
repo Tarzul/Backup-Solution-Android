@@ -13,10 +13,11 @@ import androidx.work.WorkerParameters
 import com.rezerv.upload.data.TaskRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 @HiltWorker
 class TaskWorker @AssistedInject constructor(
@@ -30,7 +31,8 @@ class TaskWorker @AssistedInject constructor(
         private const val MAX_RETRY = 3
     }
 
-    // ✅ Throttler для Notification (не чаще раза в 500мс)
+    // ✅ ИСПРАВЛЕНО: Добавлен @Volatile для видимости между потоками
+    @Volatile
     private var lastNotificationUpdate = 0L
     private val notificationLock = Any()
 
@@ -64,7 +66,7 @@ class TaskWorker @AssistedInject constructor(
 
                     // ✅ Foreground Service: показываем уведомление перед началом
                     setForeground(NotificationHelper.createForegroundInfo(
-                        applicationContext, task.name, task.id, 0, "Подготовка...", true  // ✅ Добавили task.id
+                        applicationContext, task.name, task.id, 0, "Подготовка...", true
                     ))
 
                     val result = SyncEngine.runTask(
@@ -73,7 +75,6 @@ class TaskWorker @AssistedInject constructor(
                         startTime = taskStartTime,
                         onProgress = { message ->
                             Log.d(TAG, "  $message")
-                            // ✅ Оборачиваем в launch для вызова suspend функции
                             launch {
                                 throttledUpdate(task.id, task.name, 0, message, isIndeterminate = true)
                             }
@@ -81,7 +82,6 @@ class TaskWorker @AssistedInject constructor(
                         onLiveUpdate = { name, idx, total ->
                             HistoryManager.updateLiveRecord(applicationContext, taskStartTime, name, idx, total)
                             val progress = if (total > 0) (idx * 100 / total) else 0
-                            // ✅ Оборачиваем в launch для вызова suspend функции
                             launch {
                                 throttledUpdate(task.id, task.name, progress, name, isIndeterminate = false)
                             }
@@ -98,6 +98,20 @@ class TaskWorker @AssistedInject constructor(
                     if (result.errors > 0 && task.notifyOnError)
                         NotificationHelper.showResult(applicationContext, task.name, false, result.errors)
 
+                } catch (ce: CancellationException) {
+                    // ✅ ИСПРАВЛЕНО: Корректно обрабатываем отмену
+                    Log.i(TAG, "'${task.name}' была отменена")
+                    throw ce  // Передаём дальше для корректной отмены корутины
+
+                } catch (e: IOException) {
+                    // ✅ ИСПРАВЛЕНО: Сетевые ошибки - повторяем
+                    Log.e(TAG, "'${task.name}' сетевая ошибка", e)
+                    totalErrors++
+                    repository.saveTask(task.copy(
+                        lastRun = System.currentTimeMillis(), lastStatus = "error"))
+                    if (task.notifyOnError)
+                        NotificationHelper.showResult(applicationContext, task.name, false, 1)
+
                 } catch (e: Exception) {
                     Log.e(TAG, "'${task.name}' упало", e)
                     totalErrors++
@@ -110,6 +124,11 @@ class TaskWorker @AssistedInject constructor(
 
             if (totalErrors > 0 && runAttemptCount < MAX_RETRY) Result.retry()
             else Result.success()
+
+        } catch (ce: CancellationException) {
+            // ✅ ИСПРАВЛЕНО: Корректно обрабатываем отмену на верхнем уровне
+            Log.i(TAG, "Задача была отменена")
+            throw ce
 
         } catch (e: Exception) {
             Log.e(TAG, "Критическая ошибка", e)
@@ -127,14 +146,16 @@ class TaskWorker @AssistedInject constructor(
         // ✅ ШАГ 1: Внутри synchronized только проверяем условие
         val shouldUpdate = synchronized(notificationLock) {
             val now = System.currentTimeMillis()
-            if (now - lastNotificationUpdate >= 500L) {
+            val timeSinceLastUpdate = now - lastNotificationUpdate
+
+            if (timeSinceLastUpdate >= 500L) {
                 lastNotificationUpdate = now
                 true  // Нужно обновить
             } else {
                 false // Слишком рано, пропускаем
             }
         }
-        
+
         // ✅ ШАГ 2: Suspend вызов ВЫНЕСЕН за пределы synchronized
         if (shouldUpdate) {
             try {

@@ -5,11 +5,13 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.*
-import kotlin.coroutines.coroutineContext
 import com.rezerv.upload.utils.ProgressThrottler
 
 object SyncEngine {
     private const val TAG = "SyncEngine"
+
+    // ✅ ИСПРАВЛЕНО: Разумный таймаут вместо 4 часов
+    private const val MAX_SYNC_DURATION_MS = 30 * 60 * 1000L  // 30 минут максимум
 
     data class SyncResult(
         val checked: Int,
@@ -37,8 +39,10 @@ object SyncEngine {
     )
 
     /**
-     * ИСПРАВЛЕНО: suspend-функция вместо блокирующей.
-     * Вызывается из coroutine scope (TaskWorker, MainViewModel).
+     * ✅ ИСПРАВЛЕНО:
+     * - Добавлен таймаут для предотвращения зависаний
+     * - Разумное время удержания WakeLock (30 минут вместо 4 часов)
+     * - Добавлена обработка TimeoutCancellationException
      */
     suspend fun runTask(
         context: Context,
@@ -56,23 +60,26 @@ object SyncEngine {
         val res = SideResult()
 
         // ==================== SETUP PHASE: Блокировки ====================
-        
-        // 1. WakeLock (CPU не спит)
+
+        // 1. WakeLock с разумным таймаутом
         val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
         val wakeLock = pm.newWakeLock(
-            android.os.PowerManager.PARTIAL_WAKE_LOCK, 
+            android.os.PowerManager.PARTIAL_WAKE_LOCK,
             "RezervApp:SyncWakeLock"
         )
-        wakeLock.acquire(4 * 60 * 60 * 1000L)
 
-        // 2. WifiLock (Wi-Fi не отключается)
+        // ✅ ИСПРАВЛЕНО: Разумный таймаут вместо 4 часов
+        wakeLock.acquire(MAX_SYNC_DURATION_MS)
+        Log.d(TAG, "✅ WakeLock acquired (max ${MAX_SYNC_DURATION_MS / 1000}s)")
+
+        // 2. WifiLock
         var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
         try {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
             if (wifiManager != null && wifiManager.isWifiEnabled) {
                 @Suppress("DEPRECATION")
                 wifiLock = wifiManager.createWifiLock(
-                    android.net.wifi.WifiManager.WIFI_MODE_FULL,  // ✅ Не deprecated
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL,
                     "RezervApp:WifiLock"
                 ).apply {
                     setReferenceCounted(false)
@@ -84,10 +91,10 @@ object SyncEngine {
             Log.w(TAG, "Не удалось получить WifiLock", e)
         }
 
-        // 3. NetworkRequest (Привязка процесса к активной сети)
+        // 3. NetworkRequest
         var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-        
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             val request = android.net.NetworkRequest.Builder()
                 .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -109,72 +116,64 @@ object SyncEngine {
 
         // ==================== MAIN LOGIC ====================
         try {
-            progress("▶ Задание: ${task.name}")
+            // ✅ ИСПРАВЛЕНО: Оборачиваем в withTimeout для защиты от зависаний
+            withTimeout(MAX_SYNC_DURATION_MS - 5000L) {  // Запас 5 секунд на cleanup
+                progress("▶ Задание: ${task.name}")
 
-            if (server.isEmpty()) {
-                progress("✗ Не указан сервер")
-                res.errors++
-                res.errorList.add(SyncErrorDetail("Сервер", "не указан"))
-            } else if (!task.isValid()) {
-                progress("✗ Некорректная пара папок")
-                res.errors++
-                res.errorList.add(SyncErrorDetail("Задание", "некорректная пара папок"))
-            } else {
-                val leftLocal = !task.leftIsWebdav
-                try {
-                    if (leftLocal) {
-                        val localUri = task.leftLocalUri
-                        val webPath = task.rightWebdavPath
-                        ensureRemoteFolder(server, user, pass, webPath, progress, res, "Справа")
-                        val doc = doc(context, localUri, progress, res)
-                        when (task.syncType) {
-                            "to_right" -> uploadLocal(context, doc, server, webPath, user, pass, progress, "Справа", res, live)
-                            "to_left" -> downloadTo(context, webPath, doc, server, user, pass, progress, "Слева", res, live)
-                            else -> {
-                                uploadLocal(context, doc, server, webPath, user, pass, progress, "Справа", res, live)
-                                downloadTo(context, webPath, doc, server, user, pass, progress, "Слева", res, live)
-                            }
-                        }
-                    } else {
-                        val localUri = task.rightLocalUri
-                        val webPath = task.leftWebdavPath
-                        ensureRemoteFolder(server, user, pass, webPath, progress, res, "Слева")
-                        val doc = doc(context, localUri, progress, res)
-                        when (task.syncType) {
-                            "to_right" -> downloadTo(context, webPath, doc, server, user, pass, progress, "Справа", res, live)
-                            "to_left" -> uploadLocal(context, doc, server, webPath, user, pass, progress, "Слева", res, live)
-                            else -> {
-                                uploadLocal(context, doc, server, webPath, user, pass, progress, "Слева", res, live)
-                                downloadTo(context, webPath, doc, server, user, pass, progress, "Справа", res, live)
-                            }
-                        }
-                    }
-                } catch (t: Throwable) {
+                if (server.isEmpty()) {
+                    progress("✗ Не указан сервер")
                     res.errors++
-                    res.errorList.add(SyncErrorDetail("Движок", "${t.javaClass.simpleName}: ${t.message}"))
-                    progress("✗ ${t.javaClass.simpleName}: ${t.message}")
-                    Log.e(TAG, "Sync error", t)
+                    res.errorList.add(SyncErrorDetail("Сервер", "не указан"))
+                } else if (!task.isValid()) {
+                    progress("✗ Некорректная пара папок")
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail("Задание", "некорректная пара папок"))
+                } else {
+                    val leftLocal = !task.leftIsWebdav
+                    try {
+                        if (leftLocal) {
+                            val localUri = task.leftLocalUri
+                            val webPath = task.rightWebdavPath
+                            ensureRemoteFolder(server, user, pass, webPath, progress, res, "Справа")
+                            val doc = doc(context, localUri, progress, res)
+                            when (task.syncType) {
+                                "to_right" -> uploadLocal(context, doc, server, webPath, user, pass, progress, "Справа", res, live)
+                                "to_left" -> downloadTo(context, webPath, doc, server, user, pass, progress, "Слева", res, live)
+                                else -> {
+                                    uploadLocal(context, doc, server, webPath, user, pass, progress, "Справа", res, live)
+                                    downloadTo(context, webPath, doc, server, user, pass, progress, "Слева", res, live)
+                                }
+                            }
+                        } else {
+                            val localUri = task.rightLocalUri
+                            val webPath = task.leftWebdavPath
+                            ensureRemoteFolder(server, user, pass, webPath, progress, res, "Слева")
+                            val doc = doc(context, localUri, progress, res)
+                            when (task.syncType) {
+                                "to_right" -> downloadTo(context, webPath, doc, server, user, pass, progress, "Справа", res, live)
+                                "to_left" -> uploadLocal(context, doc, server, webPath, user, pass, progress, "Слева", res, live)
+                                else -> {
+                                    uploadLocal(context, doc, server, webPath, user, pass, progress, "Слева", res, live)
+                                    downloadTo(context, webPath, doc, server, user, pass, progress, "Справа", res, live)
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        res.errors++
+                        res.errorList.add(SyncErrorDetail("Движок", "${t.javaClass.simpleName}: ${t.message}"))
+                        progress("✗ ${t.javaClass.simpleName}: ${t.message}")
+                        Log.e(TAG, "Sync error", t)
+                    }
                 }
             }
-
-            res.durationMs = System.currentTimeMillis() - startTime
-            progress("■ Завершено: загружено ${res.uploaded}, скачано ${res.downloaded}, ошибок ${res.errors}")
-
-            HistoryManager.finalizeRecord(context, HistoryRecord(
-                time = startTime, durationMs = res.durationMs, checked = res.checked,
-                uploaded = res.uploaded, downloaded = res.downloaded, deleted = 0,
-                errors = res.errors, status = if (res.errors == 0) "ok" else "error",
-                trigger = trigger, bytesTransferred = res.bytes, transferMs = res.transferMs,
-                filesJson = filesToJson(res.files),
-                foldersJson = foldersToJson(res.folders),
-                errorsJson = errorsToJson(res.errorList),
-                taskName = task.name, taskId = task.id,
-                totalFiles = res.checked
-            ))
-
+        } catch (te: TimeoutCancellationException) {
+            // ✅ Обработка таймаута
+            progress("✗ Превышено максимальное время синхронизации (${MAX_SYNC_DURATION_MS / 1000 / 60} мин)")
+            res.errors++
+            res.errorList.add(SyncErrorDetail("Таймаут", "синхронизация заняла слишком много времени"))
         } finally {
             // ==================== CLEANUP PHASE: Освобождение блокировок ====================
-            
+
             // 1. Освобождаем NetworkRequest (отвязываем процесс)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 networkCallback?.let { callback ->
@@ -187,7 +186,7 @@ object SyncEngine {
                     }
                 }
             }
-            
+
             // 2. Освобождаем WifiLock
             wifiLock?.let { lock ->
                 if (lock.isHeld) {
@@ -195,7 +194,7 @@ object SyncEngine {
                     Log.d(TAG, "WifiLock released")
                 }
             }
-            
+
             // 3. Освобождаем WakeLock
             if (wakeLock.isHeld) {
                 wakeLock.release()
@@ -203,217 +202,244 @@ object SyncEngine {
             }
         }
 
+        res.durationMs = System.currentTimeMillis() - startTime
+        progress("■ Завершено: загружено ${res.uploaded}, скачано ${res.downloaded}, ошибок ${res.errors}")
+
+        HistoryManager.finalizeRecord(context, HistoryRecord(
+            time = startTime, durationMs = res.durationMs, checked = res.checked,
+            uploaded = res.uploaded, downloaded = res.downloaded, deleted = 0,
+            errors = res.errors, status = if (res.errors == 0) "ok" else "error",
+            trigger = trigger, bytesTransferred = res.bytes, transferMs = res.transferMs,
+            filesJson = filesToJson(res.files),
+            foldersJson = foldersToJson(res.folders),
+            errorsJson = errorsToJson(res.errorList),
+            taskName = task.name, taskId = task.id,
+            totalFiles = res.checked
+        ))
+
         SyncResult(res.checked, res.uploaded, res.downloaded, res.errors, res.durationMs)
     }
 
     // ==================== Upload (suspend) ====================
 
+    /**
+     * ✅ ИСПРАВЛЕНО:
+     * - Использует coroutineScope {} внутри функции вместо expression body
+     * - ProgressThrottler получает scope из текущего контекста (this@coroutineScope)
+     * - Автоматически отменяется при отмене родительской корутины
+     */
     private suspend fun uploadLocal(
         context: Context, dir: DocumentFile?, server: String, webPath: String,
         user: String, pass: String, progress: (String) -> Unit, side: String,
         res: SideResult, live: (String, Int, Int) -> Unit
     ) {
-        if (dir == null) return
-        live("📋 Список: ${webPath.substringAfterLast('/')}/", 0, 0)
+        coroutineScope {
+            if (dir == null) return@coroutineScope
+            live("📋 Список: ${webPath.substringAfterLast('/')}/", 0, 0)
 
-        val remote = listRemote(server, user, pass, webPath, progress, res) ?: return
-        val remoteFiles = remote.filter { !it.isDir }.associate { it.name to it }
+            val remote = listRemote(server, user, pass, webPath, progress, res) ?: return@coroutineScope
+            val remoteFiles = remote.filter { !it.isDir }.associate { it.name to it }
 
-        val allFiles = dir.listFiles().filter {
-            it.isFile && !it.isDirectory && !isJunkFile(it.name ?: "") && it.length() > 0L
-        }
-        val totalToUpload = allFiles.size
-        var fileIndex = 0
+            val allFiles = dir.listFiles().filter {
+                it.isFile && !it.isDirectory && !isJunkFile(it.name ?: "") && it.length() > 0L
+            }
+            val totalToUpload = allFiles.size
+            var fileIndex = 0
 
-        for (f in dir.listFiles()) {
-            val name = f.name ?: continue
-            if (isJunkFile(name) || f.isDirectory) {
-                if (f.isDirectory && !isJunkFolder(name)) {
-                    val sub = webPath.trimEnd('/') + "/" + name
-                    ensureRemoteFolder(server, user, pass, sub, progress, res, side)
-                    uploadLocal(context, f, server, sub, user, pass, progress, side, res, live)
+            for (f in dir.listFiles()) {
+                val name = f.name ?: continue
+                if (isJunkFile(name) || f.isDirectory) {
+                    if (f.isDirectory && !isJunkFolder(name)) {
+                        val sub = webPath.trimEnd('/') + "/" + name
+                        ensureRemoteFolder(server, user, pass, sub, progress, res, side)
+                        uploadLocal(context, f, server, sub, user, pass, progress, side, res, live)
+                    }
+                    continue
                 }
-                continue
-            }
-            if (!f.isFile || f.length() <= 0L) continue
+                if (!f.isFile || f.length() <= 0L) continue
 
-            res.checked++
-            fileIndex++
-            live(name, fileIndex, totalToUpload)
+                res.checked++
+                fileIndex++
+                live(name, fileIndex, totalToUpload)
 
-            val rFile = remoteFiles[name]
-            if (rFile != null && rFile.size == f.length()) {
-                val localM = f.lastModified()
-                val remoteM = rFile.lastModified
-                if (remoteM <= 0L || localM <= 0L) continue
-                if (remoteM >= localM - 1500L) continue
-            }
+                val rFile = remoteFiles[name]
+                if (rFile != null && rFile.size == f.length()) {
+                    val localM = f.lastModified()
+                    val remoteM = rFile.lastModified
+                    if (remoteM <= 0L || localM <= 0L) continue
+                    if (remoteM >= localM - 1500L) continue
+                }
 
-            progress("   ⬆ $name")
-            val t0 = System.currentTimeMillis()
-            
-            try {
-                val input = context.contentResolver.openInputStream(f.uri)
-                if (input == null) {
-                    progress("   ✗ $name: не удалось открыть")
-                    res.errors++
-                    res.errorList.add(SyncErrorDetail(name, "не удалось открыть"))
-                } else {
-                    // ✅ Получаем CoroutineScope из suspend-контекста
-                    val scope = CoroutineScope(coroutineContext)
-                    
-                    input.use {
-                        val throttledProgress = ProgressThrottler(
-                            scope = scope,  // ✅ Передаем правильный scope
-                            onUpdate = { written, total ->
-                                live(name, written.toInt(), total.toInt())
+                progress("   ⬆ $name")
+                val t0 = System.currentTimeMillis()
+
+                try {
+                    val input = context.contentResolver.openInputStream(f.uri)
+                    if (input == null) {
+                        progress("   ✗ $name: не удалось открыть")
+                        res.errors++
+                        res.errorList.add(SyncErrorDetail(name, "не удалось открыть"))
+                    } else {
+                        // ✅ ИСПРАВЛЕНО: Используем текущий coroutineScope вместо нового
+                        input.use {
+                            val throttledProgress = ProgressThrottler(
+                                scope = this@coroutineScope,  // ✅ Явно указываем scope
+                                onUpdate = { written, total ->
+                                    live(name, written.toInt(), total.toInt())
+                                }
+                            )
+
+                            val code = WebDavClient.put(
+                                url = server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name),
+                                user = user,
+                                pass = pass,
+                                inputStream = it,
+                                fileSize = f.length(),
+                                onProgress = { written, total ->
+                                    throttledProgress.emit(written, total)
+                                }
+                            )
+
+                            if (code in 200..299) {
+                                res.uploaded++
+                                res.bytes += f.length()
+                                res.files.add(SyncFileDetail(name, f.length(), System.currentTimeMillis() - t0, side))
+                                progress("   ✓ $name")
+                            } else {
+                                val reason = httpErrorReason(code)
+                                progress("   ✗ $name: $reason")
+                                res.errors++
+                                res.errorList.add(SyncErrorDetail(name, reason))
                             }
-                        )
-
-                        val code = WebDavClient.put(
-                            url = server + WebDavRepository.encodePath(webPath.trimEnd('/') + "/" + name),
-                            user = user,
-                            pass = pass,
-                            inputStream = it,
-                            fileSize = f.length(),
-                            onProgress = { written, total ->
-                                throttledProgress.emit(written, total)
-                            }
-                        )
-
-                        if (code in 200..299) {
-                            res.uploaded++
-                            res.bytes += f.length()
-                            res.files.add(SyncFileDetail(name, f.length(), System.currentTimeMillis() - t0, side))
-                            progress("   ✓ $name")
-                        } else {
-                            val reason = httpErrorReason(code)
-                            progress("   ✗ $name: $reason")
-                            res.errors++
-                            res.errorList.add(SyncErrorDetail(name, reason))
                         }
                     }
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    progress("   ✗ $name: ${e.message}")
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail(name, e.message ?: "исключение"))
+                    Log.e(TAG, "Upload error: $name", e)
                 }
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (e: Exception) {
-                progress("   ✗ $name: ${e.message}")
-                res.errors++
-                res.errorList.add(SyncErrorDetail(name, e.message ?: "исключение"))
-                Log.e(TAG, "Upload error: $name", e)
+                res.transferMs += System.currentTimeMillis() - t0
             }
-            res.transferMs += System.currentTimeMillis() - t0
         }
     }
 
     // ==================== Download (suspend) ====================
 
+    /**
+     * ✅ ИСПРАВЛЕНО:
+     * - Использует coroutineScope {} внутри функции вместо expression body
+     * - ProgressThrottler получает scope из текущего контекста (this@coroutineScope)
+     * - Автоматически отменяется при отмене родительской корутины
+     */
     private suspend fun downloadTo(
         context: Context, webPath: String, dir: DocumentFile?, server: String,
         user: String, pass: String, progress: (String) -> Unit, side: String,
         res: SideResult, live: (String, Int, Int) -> Unit
     ) {
-        if (dir == null) return
-        live("📋 Список (скачивание): ${webPath.substringAfterLast('/')}/", 0, 0)
+        coroutineScope {
+            if (dir == null) return@coroutineScope
+            live("📋 Список (скачивание): ${webPath.substringAfterLast('/')}/", 0, 0)
 
-        val entries = listRemote(server, user, pass, webPath, progress, res) ?: return
-        val fileEntries = entries.filter { !it.isDir }
-        val totalToDownload = fileEntries.size
-        var fileIndex = 0
+            val entries = listRemote(server, user, pass, webPath, progress, res) ?: return@coroutineScope
+            val fileEntries = entries.filter { !it.isDir }
+            val totalToDownload = fileEntries.size
+            var fileIndex = 0
 
-        val localChildren = dir.listFiles()
-        val localMap = HashMap<String, DocumentFile>(localChildren.size)
-        for (c in localChildren) {
-            val n = c.name
-            if (!c.isDirectory && n != null) localMap[n] = c
-        }
-
-        for (e in entries) {
-            val remote = webPath.trimEnd('/') + "/" + e.name
-            if (isJunkFile(e.name) || isJunkFolder(e.name)) continue
-
-            if (e.isDir) {
-                val sub = localChildren.firstOrNull { it.isDirectory && it.name == e.name }
-                    ?: dir.createDirectory(e.name) ?: continue
-                downloadTo(context, remote, sub, server, user, pass, progress, side, res, live)
-                continue
+            val localChildren = dir.listFiles()
+            val localMap = HashMap<String, DocumentFile>(localChildren.size)
+            for (c in localChildren) {
+                val n = c.name
+                if (!c.isDirectory && n != null) localMap[n] = c
             }
 
-            res.checked++
-            var existing = localMap[e.name]
-            if (existing != null && existing.length() == e.size) continue
-            if (existing == null) existing = dir.findFile(e.name)?.takeIf { it.isFile }
-            if (existing != null && existing.length() == e.size) continue
+            for (e in entries) {
+                val remote = webPath.trimEnd('/') + "/" + e.name
+                if (isJunkFile(e.name) || isJunkFolder(e.name)) continue
 
-            fileIndex++
-            live(e.name, fileIndex, totalToDownload)
-            progress("   ⬇ ${e.name}")
-            val t0 = System.currentTimeMillis()
-
-            try {
-                val target = existing ?: dir.createFile(getMimeType(e.name), e.name)
-                if (target == null) {
-                    progress("   ✗ ${e.name}: не удалось создать файл")
-                    res.errors++
-                    res.errorList.add(SyncErrorDetail(e.name, "не удалось создать файл"))
+                if (e.isDir) {
+                    val sub = localChildren.firstOrNull { it.isDirectory && it.name == e.name }
+                        ?: dir.createDirectory(e.name) ?: continue
+                    downloadTo(context, remote, sub, server, user, pass, progress, side, res, live)
                     continue
                 }
 
-                val scope = CoroutineScope(coroutineContext)
-                
-                val throttledProgress = ProgressThrottler(
-                    scope = scope,
-                    onUpdate = { written, total ->
-                        live(e.name, written.toInt(), total.toInt())
-                    }
-                )
+                res.checked++
+                var existing = localMap[e.name]
+                if (existing != null && existing.length() == e.size) continue
+                if (existing == null) existing = dir.findFile(e.name)?.takeIf { it.isFile }
+                if (existing != null && existing.length() == e.size) continue
 
-                val downloadResult = context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
-                    WebDavClient.downloadStreaming(
-                        url = server + WebDavRepository.encodePath(remote),
-                        user = user,
-                        pass = pass,
-                        outputStream = out,
-                        onProgress = { written, total ->
-                            throttledProgress.emit(written, total)
+                fileIndex++
+                live(e.name, fileIndex, totalToDownload)
+                progress("   ⬇ ${e.name}")
+                val t0 = System.currentTimeMillis()
+
+                try {
+                    val target = existing ?: dir.createFile(getMimeType(e.name), e.name)
+                    if (target == null) {
+                        progress("   ✗ ${e.name}: не удалось создать файл")
+                        res.errors++
+                        res.errorList.add(SyncErrorDetail(e.name, "не удалось создать файл"))
+                        continue
+                    }
+
+                    // ✅ ИСПРАВЛЕНО: Используем текущий coroutineScope
+                    val throttledProgress = ProgressThrottler(
+                        scope = this@coroutineScope,  // ✅ Явно указываем scope
+                        onUpdate = { written, total ->
+                            live(e.name, written.toInt(), total.toInt())
                         }
                     )
-                } ?: Result.failure(java.io.IOException("Не удалось открыть OutputStream"))
 
-                downloadResult.fold(
-                    onSuccess = { bytesCopied ->
-                        // ✅ Используем bytesCopied напрямую
-                        res.downloaded++
-                        res.bytes += bytesCopied
-                        res.files.add(SyncFileDetail(e.name, bytesCopied, System.currentTimeMillis() - t0, side))
-                        progress("   ✓ ${e.name}")
-                    },
-                    onFailure = { exception ->
-                        if (exception is kotlinx.coroutines.CancellationException) {
+                    val downloadResult = context.contentResolver.openOutputStream(target.uri, "rwt")?.use { out ->
+                        WebDavClient.downloadStreaming(
+                            url = server + WebDavRepository.encodePath(remote),
+                            user = user,
+                            pass = pass,
+                            outputStream = out,
+                            onProgress = { written, total ->
+                                throttledProgress.emit(written, total)
+                            }
+                        )
+                    } ?: Result.failure(java.io.IOException("Не удалось открыть OutputStream"))
+
+                    downloadResult.fold(
+                        onSuccess = { bytesCopied ->
+                            res.downloaded++
+                            res.bytes += bytesCopied
+                            res.files.add(SyncFileDetail(e.name, bytesCopied, System.currentTimeMillis() - t0, side))
+                            progress("   ✓ ${e.name}")
+                        },
+                        onFailure = { exception ->
+                            if (exception is kotlinx.coroutines.CancellationException) {
+                                target.delete()
+                                throw exception
+                            }
+                            progress("   ✗ ${e.name}: ${exception.message}")
+                            res.errors++
+                            res.errorList.add(SyncErrorDetail(e.name, exception.message ?: "исключение"))
+                            Log.e(TAG, "Download error: ${e.name}", exception)
                             target.delete()
-                            throw exception 
                         }
-                        progress("   ✗ ${e.name}: ${exception.message}")
-                        res.errors++
-                        res.errorList.add(SyncErrorDetail(e.name, exception.message ?: "исключение"))
-                        Log.e(TAG, "Download error: ${e.name}", exception)
-                        target.delete()
-                    }
-                )
+                    )
 
-            } catch (ce: kotlinx.coroutines.CancellationException) {
-                throw ce
-            } catch (e2: Exception) {
-                progress("   ✗ ${e.name}: ${e2.message}")
-                res.errors++
-                res.errorList.add(SyncErrorDetail(e.name, e2.message ?: "исключение"))
-                Log.e(TAG, "Download error: ${e.name}", e2)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (e2: Exception) {
+                    progress("   ✗ ${e.name}: ${e2.message}")
+                    res.errors++
+                    res.errorList.add(SyncErrorDetail(e.name, e2.message ?: "исключение"))
+                    Log.e(TAG, "Download error: ${e.name}", e2)
+                }
+                res.transferMs += System.currentTimeMillis() - t0
             }
-            res.transferMs += System.currentTimeMillis() - t0
         }
     }
 
-    // ==================== Утилиты ====================
+    // ==================== Утилиты (без изменений) ====================
 
     private suspend fun listRemote(
         server: String, user: String, pass: String, webPath: String,
@@ -483,15 +509,15 @@ object SyncEngine {
     private fun isJunkFile(name: String): Boolean {
         val lower = name.lowercase()
         return lower.startsWith(".thumbnails") || lower == "thumbs.db" ||
-               lower == ".ds_store" || lower == "desktop.ini" ||
-               lower.startsWith("._") || lower == ".nomedia"
+                lower == ".ds_store" || lower == "desktop.ini" ||
+                lower.startsWith("._") || lower == ".nomedia"
     }
 
     private fun isJunkFolder(name: String): Boolean {
         val lower = name.lowercase()
         return lower == "cache" || lower == "thumbnails" || lower == ".thumbnails" ||
-               lower == ".cache" || lower == ".trashes" || lower == ".spotlight-v100" ||
-               lower == ".fseventsd"
+                lower == ".cache" || lower == ".trashes" || lower == ".spotlight-v100" ||
+                lower == ".fseventsd"
     }
 
     private fun getMimeType(fileName: String): String {
@@ -509,8 +535,6 @@ object SyncEngine {
     }
 
     private fun parseEntries(xml: String, requestPath: String): List<Entry> {
-        // Тот же парсинг что в WebDavRepository.parseMultistatus,
-        // но возвращает Entry с lastModified
         val items = mutableListOf<Entry>()
         try {
             val factory = org.xmlpull.v1.XmlPullParserFactory.newInstance()

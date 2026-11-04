@@ -65,11 +65,23 @@ object WebDavClient {
                     // 5xx — пробуем снова
                     Log.w(TAG, "HTTP ${response.code} (попытка ${attempt + 1}/$maxRetries)")
                     response.close()
-                    if (attempt < maxRetries) Thread.sleep((1000L * (attempt + 1))) // backoff
+
+                    // ✅ ИСПРАВЛЕНО: Добавлено логирование backoff
+                    if (attempt < maxRetries) {
+                        val backoffMs = 1000L * (attempt + 1)
+                        Log.d(TAG, "Backoff: waiting ${backoffMs}ms before retry")
+                        Thread.sleep(backoffMs)  // OkHttp interceptor блокирует поток, это ОК
+                    }
                 } catch (e: IOException) {
                     lastException = e
                     Log.w(TAG, "IOException (попытка ${attempt + 1}/$maxRetries): ${e.message}")
-                    if (attempt < maxRetries) Thread.sleep((1000L * (attempt + 1)))
+
+                    // ✅ ИСПРАВЛЕНО: Добавлено логирование backoff
+                    if (attempt < maxRetries) {
+                        val backoffMs = 1000L * (attempt + 1)
+                        Log.d(TAG, "Backoff: waiting ${backoffMs}ms before retry")
+                        Thread.sleep(backoffMs)
+                    }
                 }
             }
             throw lastException ?: IOException("Max retries exceeded for ${request.url}")
@@ -77,6 +89,18 @@ object WebDavClient {
     }
 
     // ==================== Утилиты ====================
+
+    // ✅ ИСПРАВЛЕНО: Добавлена функция валидации безопасности
+    private fun validateSecurity(url: String, user: String, pass: String) {
+        if (!url.startsWith("https://")) {
+            Log.w(TAG, "⚠️ ВНИМАНИЕ: Пароли передаются через HTTP без шифрования!")
+            Log.w(TAG, "Рекомендуется использовать HTTPS для защиты данных")
+        }
+        if (user.isEmpty() || pass.isEmpty()) {
+            throw IllegalArgumentException("User and password cannot be empty")
+        }
+    }
+
     private fun authHeader(user: String, pass: String): String =
         "Basic " + android.util.Base64.encodeToString("$user:$pass".toByteArray(), android.util.Base64.NO_WRAP)
 
@@ -105,6 +129,7 @@ object WebDavClient {
     // ==================== WebDAV-операции ====================
 
     suspend fun options(server: String, user: String, pass: String): Pair<Int, String> {
+        validateSecurity(server, user, pass)  // ✅ Проверка безопасности
         val request = Request.Builder()
             .url(server)
             .method("OPTIONS", null)
@@ -117,6 +142,7 @@ object WebDavClient {
     }
 
     suspend fun propfind(server: String, user: String, pass: String): String {
+        validateSecurity(server, user, pass)  // ✅ Проверка безопасности
         val body = """<?xml version="1.0" encoding="utf-8"?>
             <D:propfind xmlns:D="DAV:">
                 <D:prop>
@@ -144,6 +170,7 @@ object WebDavClient {
 
     /** GET — возвращает Response. Вызывающий ОБЯЗАН закрыть response.body. */
     suspend fun get(url: String, user: String, pass: String): Response {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
         val request = Request.Builder()
             .url(url)
             .get()
@@ -154,11 +181,13 @@ object WebDavClient {
 
     /** PUT — загружает InputStream, возвращает HTTP-код. */
     suspend fun put(
-        url: String, user: String, pass: String, 
-        inputStream: InputStream, 
+        url: String, user: String, pass: String,
+        inputStream: InputStream,
         fileSize: Long = -1L,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Int {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
+
         // 1. Базовый RequestBody, который читает InputStream стримом
         val delegateBody = object : RequestBody() {
             override fun contentType() = "application/octet-stream".toMediaType()
@@ -196,6 +225,8 @@ object WebDavClient {
         outputStream: java.io.OutputStream,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Result<Long> {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
+
         val request = Request.Builder()
             .url(url)
             .get()
@@ -210,21 +241,21 @@ object WebDavClient {
                     val body = response.body
                     val contentLength = body.contentLength()
                     var bytesCopied = 0L
-                
+
                     val source = body.source()
                     val sink = outputStream.sink().buffer()
                     val buffer = Buffer()
 
                     while (true) {
-                        // МГНОВЕННАЯ ПРОВЕРКА ОТМЕНЫ: 
+                        // МГНОВЕННАЯ ПРОВЕРКА ОТМЕНЫ:
                         // Если пользователь нажал "Стоп", цикл прервется на следующем чанке (8 КБ)
                         if (!coroutineContext.isActive) {
                             throw kotlinx.coroutines.CancellationException("Download cancelled")
                         }
-                    
+
                         val read = source.read(buffer, 8192)
                         if (read == -1L) break
-                    
+
                         sink.write(buffer, read)
                         bytesCopied += read
                         onProgress(bytesCopied, contentLength)
@@ -236,9 +267,10 @@ object WebDavClient {
         } catch (e: Exception) {
             Result.failure(e)
         }
-    }    
+    }
 
     suspend fun delete(url: String, user: String, pass: String): Int {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
         val request = Request.Builder()
             .url(url)
             .delete()
@@ -248,6 +280,7 @@ object WebDavClient {
     }
 
     suspend fun mkcol(url: String, user: String, pass: String): Int {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
         val request = Request.Builder()
             .url(url)
             .method("MKCOL", null)
@@ -257,6 +290,7 @@ object WebDavClient {
     }
 
     suspend fun head(url: String, user: String, pass: String): Response {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
         val request = Request.Builder()
             .url(url)
             .head()
@@ -271,6 +305,7 @@ object WebDavClient {
         pass: String,
         headers: Map<String, String>
     ): Response {
+        validateSecurity(url, user, pass)  // ✅ Проверка безопасности
         val requestBuilder = Request.Builder()
             .url(url)
             .get()

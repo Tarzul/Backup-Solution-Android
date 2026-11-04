@@ -19,6 +19,7 @@ import com.rezerv.upload.data.FileCacheRepository
 import com.rezerv.upload.data.HistoryRepository
 import com.rezerv.upload.data.SettingsRepository
 import com.rezerv.upload.data.WebDavService
+import com.rezerv.upload.data.local.FileDao
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -30,31 +31,37 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
-/**
- * ViewModel для вкладки "Браузер".
- * ✅ Интегрирован FileCacheRepository для мгновенной прокрутки (Stale While Revalidate).
- */
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
     application: Application,
     private val webDavService: WebDavService,
     private val historyRepo: HistoryRepository,
     private val settingsRepo: SettingsRepository,
-    private val fileCacheRepo: FileCacheRepository // ✅ ДОБАВЛЕНО
+    private val fileCacheRepo: FileCacheRepository,
+    private val fileDao: FileDao // ✅ Добавляем FileDao для пагинации
 ) : AndroidViewModel(application) {
 
     companion object {
         private const val MAX_PARALLEL_UPLOADS = 3
         private const val MAX_IMAGES_IN_PAGER = 500
+        private const val PAGE_SIZE = 50 // ✅ Размер страницы для пагинации
     }
 
     data class BrowserState(
         val currentPath: String = "/",
         val files: List<WebDavRepository.FileInfo> = emptyList(),
         val isLoading: Boolean = false,
+        val isLoadingMore: Boolean = false, // ✅ Для пагинации
+        val hasMoreData: Boolean = true,    // ✅ Для пагинации
         val selectedIndices: Set<Int> = emptySet(),
-        val selectionMode: Boolean = false
+        val selectionMode: Boolean = false,
+        val isEmpty: Boolean = false,       // ✅ Для empty state
+        val viewMode: ViewMode = ViewMode.LIST // ✅ Список или сетка
     )
+
+    enum class ViewMode {
+        LIST, GRID
+    }
 
     sealed class BrowserEvent {
         data class ShowToast(val message: String) : BrowserEvent()
@@ -74,6 +81,10 @@ class BrowserViewModel @Inject constructor(
     private val logLock = Any()
     private var logBuffer = ""
 
+    // ✅ Для пагинации
+    private var currentPage = 0
+    private var totalCount = 0
+
     private var rangeBase: Set<Int> = emptySet()
     private var rangeModeAdd = true
     private val uploadSemaphore = Semaphore(MAX_PARALLEL_UPLOADS)
@@ -89,16 +100,31 @@ class BrowserViewModel @Inject constructor(
 
         appendLog("📋 Получение списка: $path")
 
-        // ШАГ 1: Мгновенно показываем данные из Room-кэша
+        // Сбрасываем пагинацию
+        currentPage = 0
+
+        // Показываем скелетон
+        _state.postValue(_state.value?.copy(isLoading = true, files = emptyList()))
+
+        // ШАГ 1: Мгновенно показываем данные из Room-кэша (первая страница)
         viewModelScope.launch {
             fileCacheRepo.getFilesFlow(serverHost, path).collectLatest { cachedFiles ->
                 val sorted = cachedFiles.sortedWith(
                     compareBy<WebDavRepository.FileInfo> { !it.isDirectory }.thenBy { it.name }
                 )
+
+                totalCount = sorted.size
+                val isEmpty = sorted.isEmpty()
+
+                // Берем только первую страницу для мгновенного отображения
+                val firstPage = sorted.take(PAGE_SIZE)
+
                 _state.postValue(_state.value?.copy(
                     currentPath = path,
-                    files = sorted,
-                    isLoading = sorted.isEmpty(),
+                    files = firstPage,
+                    isLoading = false,
+                    isEmpty = isEmpty,
+                    hasMoreData = sorted.size > PAGE_SIZE,
                     selectionMode = false,
                     selectedIndices = emptySet()
                 ))
@@ -119,6 +145,60 @@ class BrowserViewModel @Inject constructor(
             CoilPrefetch.prefetch(getApplication(), server, user, pass, currentFiles)
         }
     }
+
+    // ✅ НОВОЕ: Загрузка следующей страницы
+    fun loadMoreFiles(server: String, user: String, pass: String) {
+        val state = _state.value ?: return
+        if (state.isLoadingMore || !state.hasMoreData) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.postValue(state.copy(isLoadingMore = true))
+
+            val serverHost = extractHost(server)
+            currentPage++
+            val offset = currentPage * PAGE_SIZE
+
+            val newFiles = fileDao.getFilesPaged(serverHost, state.currentPath, PAGE_SIZE, offset)
+                .map { it.toFileInfo() }
+
+            if (newFiles.isNotEmpty()) {
+                val updatedList = state.files + newFiles
+                val hasMore = (currentPage + 1) * PAGE_SIZE < totalCount
+
+                _state.postValue(state.copy(
+                    files = updatedList,
+                    isLoadingMore = false,
+                    hasMoreData = hasMore
+                ))
+            } else {
+                _state.postValue(state.copy(isLoadingMore = false, hasMoreData = false))
+            }
+        }
+    }
+
+    // ✅ НОВОЕ: Переключение вида (Список/Сетка)
+    fun toggleViewMode() {
+        val currentState = _state.value ?: return
+        val newMode = if (currentState.viewMode == ViewMode.LIST) ViewMode.GRID else ViewMode.LIST
+        _state.postValue(currentState.copy(viewMode = newMode))
+    }
+
+    // ✅ НОВОЕ: Принудительное обновление (для SwipeRefresh)
+    fun forceRefresh(server: String, user: String, pass: String) {
+        val base = WebDavRepository.normalizeBaseUrl(server) ?: return
+        val serverHost = extractHost(server)
+        val path = _state.value?.currentPath ?: "/"
+
+        viewModelScope.launch(Dispatchers.IO) {
+            // Принудительно обновляем с сервера
+            fileCacheRepo.refreshFromServer(serverHost, base, path, user, pass)
+            // Перезагружаем список
+            browseServer(server, path, user, pass)
+        }
+    }
+
+    // ... (остальные методы: navigateBack, toggleSelection и т.д. остаются без изменений)
+    // Для краткости я их не включаю, но они должны быть в файле
 
     fun navigateBack(server: String, user: String, pass: String) {
         val currentPath = _state.value?.currentPath ?: "/"
@@ -141,6 +221,7 @@ class BrowserViewModel @Inject constructor(
     }
 
     // ==================== Выделение ====================
+    // ... (ваши существующие методы выделения)
 
     fun toggleSelection(index: Int) {
         val state = _state.value ?: return
@@ -213,6 +294,7 @@ class BrowserViewModel @Inject constructor(
     }
 
     // ==================== Операции с файлами ====================
+    // ... (ваши существующие методы операций)
 
     fun deleteSelected(server: String, user: String, pass: String) {
         viewModelScope.launch {
@@ -240,8 +322,6 @@ class BrowserViewModel @Inject constructor(
             }
 
             _events.postValue(BrowserEvent.ShowToast("Удалено: $successCount, ошибок: $errorCount"))
-
-            // ✅ Принудительно обновляем кэш после удаления
             val serverHost = extractHost(server)
             fileCacheRepo.refreshFromServer(serverHost, base, state.currentPath, user, pass)
         }
@@ -339,12 +419,11 @@ class BrowserViewModel @Inject constructor(
                 is WebDavResult.Success -> {
                     appendLog("✓ Папка создана: $folderName")
                     _events.postValue(BrowserEvent.ShowToast("Папка создана"))
-                    // ✅ Принудительно обновляем кэш после создания
                     val serverHost = extractHost(server)
                     fileCacheRepo.refreshFromServer(serverHost, base, state.currentPath, user, pass)
                 }
                 else -> {
-                    appendLog("✗ Ошибка создания папки: ${result.errorMessage()}")
+                    appendLog(" Ошибка создания папки: ${result.errorMessage()}")
                     _events.postValue(BrowserEvent.ShowToast("Ошибка: ${result.errorMessage()}"))
                 }
             }
@@ -457,8 +536,6 @@ class BrowserViewModel @Inject constructor(
 
             appendLog("✓ Завершено: $success / $total")
             _events.postValue(BrowserEvent.UploadCompleted(success, total))
-
-            // ✅ Принудительно обновляем кэш после загрузки
             val serverHost = extractHost(server)
             fileCacheRepo.refreshFromServer(serverHost, base, targetPath, user, pass)
         }
@@ -517,7 +594,6 @@ class BrowserViewModel @Inject constructor(
         return arr.toString()
     }
 
-    // ✅ Вспомогательный метод для извлечения хоста (нужен для ключа кэша)
     private fun extractHost(url: String): String {
         return try {
             val uri = java.net.URI(url)

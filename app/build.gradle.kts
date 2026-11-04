@@ -227,4 +227,7 @@ dependencies {
 
     // ==================== Okio ====================
     implementation("com.squareup.okio:okio:3.14.0")
+
+    // Shimmer для скелетон-загрузки
+    implementation("com.facebook.shimmer:shimmer:0.5.0")
 }

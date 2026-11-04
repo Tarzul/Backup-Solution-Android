@@ -1,7 +1,7 @@
 package com.rezerv.upload
 
 import android.app.Application
-import android.content.Context // ✅ Добавлен обычный импорт Context
+import android.content.Context
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil3.ImageLoader
@@ -40,19 +40,44 @@ class BackupApplication : Application(), Configuration.Provider, SingletonImageL
             .build()
 
     override fun newImageLoader(context: PlatformContext): ImageLoader {
-        // ✅ В Coil 3 PlatformContext уже является Context, приведение типов не нужно
         val androidContext = context as Context
+
+        // ✅ Создаем OkHttpClient специально для Coil, который автоматически добавляет заголовок Authorization
+        val coilHttpClient = WebDavClient.httpClient.newBuilder()
+            .addInterceptor { chain ->
+                val request = chain.request()
+                // Если заголовок уже есть, не трогаем его
+                if (request.header("Authorization") != null) {
+                    return@addInterceptor chain.proceed(request)
+                }
+
+                // Берем сохраненные credentials
+                val (server, user, pass) = SecurePrefs.loadCredentials(androidContext)
+                if (user.isNotEmpty() && pass.isNotEmpty()) {
+                    val authHeader = "Basic " + android.util.Base64.encodeToString(
+                        "$user:$pass".toByteArray(),
+                        android.util.Base64.NO_WRAP
+                    )
+                    val newRequest = request.newBuilder()
+                        .addHeader("Authorization", authHeader)
+                        .build()
+                    return@addInterceptor chain.proceed(newRequest)
+                }
+
+                chain.proceed(request)
+            }
+            .build()
 
         return ImageLoader.Builder(context)
             .components {
-                add(OkHttpNetworkFetcherFactory(WebDavClient.httpClient))
+                // ✅ Используем наш модифицированный клиент с авто-авторизацией
+                add(OkHttpNetworkFetcherFactory(coilHttpClient))
             }
             .memoryCache {
                 MemoryCache.Builder()
                     .maxSizePercent(androidContext, 0.25)
                     .build()
             }
-            // Дисковый кэш создается Coil автоматически, ручная настройка удалена во избежание конфликтов версий Okio
             .build()
     }
 }

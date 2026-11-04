@@ -47,8 +47,7 @@ class FileRecyclerViewAdapter(
         if (payloads.contains(PAYLOAD_SELECTION_UPDATE)) {
             val isSel = selectedIndices.contains(position)
             holder.itemView.setBackgroundColor(
-                if (isSel) ContextCompat.getColor(context, R.color.selection_highlight)
-                else 0x00000000
+                if (isSel) ContextCompat.getColor(context, R.color.selection_highlight) else 0x00000000
             )
             holder.checkMark.isChecked = isSel
             holder.checkMark.visibility = if (selectionMode) View.VISIBLE else View.GONE
@@ -57,25 +56,23 @@ class FileRecyclerViewAdapter(
 
         val isSel = selectedIndices.contains(position)
         holder.itemView.setBackgroundColor(
-            if (isSel) ContextCompat.getColor(context, R.color.selection_highlight)
-            else 0x00000000
+            if (isSel) ContextCompat.getColor(context, R.color.selection_highlight) else 0x00000000
         )
 
         holder.nameView.text = item.name
         holder.nameView.setTextColor(FileUtils.getNameColor(context, item))
         holder.nameView.setTypeface(null, if (item.isDirectory) Typeface.BOLD else Typeface.NORMAL)
-
         holder.infoView.text = FileUtils.getInfoText(item)
         holder.infoView.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
 
         if (!item.isDirectory && FileUtils.isImageFile(item.name)) {
             holder.icon.dispose()
 
+            // ✅ Загружаем изображение. Заголовки добавятся автоматически через Interceptor в BackupApplication!
             holder.icon.load(WebDavImages.url(serverUrl(), item.path)) {
                 memoryCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
                 diskCacheKey(WebDavImages.cacheKey("thumb", item.path, item.size))
-
-                crossfade(200)  // ✅ ДОБАВЬТЕ ЭТУ СТРОКУ (200мс для миниатюр)
+                crossfade(200)
 
                 ContextCompat.getDrawable(context, android.R.drawable.ic_menu_gallery)?.let {
                     placeholder(it.asImage())

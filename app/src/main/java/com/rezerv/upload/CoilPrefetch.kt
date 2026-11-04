@@ -25,9 +25,9 @@ object CoilPrefetch {
         images.chunked(6).forEach { batch ->
             scope.launch {
                 batch.forEach { f ->
+                    // ✅ Заголовки добавятся автоматически через Interceptor!
                     val req = ImageRequest.Builder(app)
                         .data(WebDavImages.url(server, f.path))
-                        // ✅ Используем extras для headers в Coil 3
                         .memoryCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                         .diskCacheKey(WebDavImages.cacheKey("thumb", f.path, f.size))
                         .size(96)
